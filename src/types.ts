@@ -87,6 +87,20 @@ export type RouteResponse = {
 
 export type RouteMode = "walk" | "bike" | "car" | "bus" | "train";
 
+export type NavigationStatus =
+  | "idle"
+  | "locating"
+  | "navigating"
+  | "off-route"
+  | "rerouting"
+  | "arrived";
+
+export type UserLocationFix = {
+  lat: number;
+  lon: number;
+  accuracy: number | null;
+};
+
 export type MapSurface =
   | "mapsource"
   | "dark"

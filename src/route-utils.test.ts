@@ -7,6 +7,7 @@ import {
   haversineMeters,
   lineAtProgress,
   nearestRouteBearing,
+  nearestRoutePosition,
   pointAtProgress,
 } from "./route-utils";
 
@@ -34,6 +35,23 @@ describe("route utilities", () => {
     expect(nearestRouteBearing(line, [-121.4, 45.001])).toBeGreaterThan(89);
     expect(nearestRouteBearing(line, [-121.4, 45.001])).toBeLessThan(91);
     expect(nearestRouteBearing([], [-121.4, 45.001])).toBeNull();
+  });
+
+  it("projects live movement onto the route and measures wrong turns", () => {
+    const line: [number, number][] = [
+      [-122.72, 45.52],
+      [-122.71, 45.52],
+      [-122.7, 45.52],
+    ];
+    const onRoute = nearestRoutePosition(line, [-122.705, 45.52001]);
+    expect(onRoute?.shapeIndex).toBeCloseTo(1.5, 2);
+    expect(onRoute?.progress).toBeCloseTo(0.75, 2);
+    expect(onRoute?.distanceFromRouteMeters).toBeLessThan(2);
+
+    const offRoute = nearestRoutePosition(line, [-122.705, 45.521]);
+    expect(offRoute?.distanceFromRouteMeters).toBeGreaterThan(110);
+    expect(nearestRoutePosition(line, [-122.715, 45.52])?.segmentIndex).toBe(0);
+    expect(nearestRoutePosition([], [-122.705, 45.52])).toBeNull();
   });
 
   it("formats walk metrics and elevation paths", () => {

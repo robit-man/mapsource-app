@@ -27,6 +27,70 @@ export function routeDistances(coordinates: Coordinate[]): {
   return { cumulative, total };
 }
 
+export type RoutePosition = {
+  coordinate: Coordinate;
+  segmentIndex: number;
+  shapeIndex: number;
+  distanceAlongMeters: number;
+  distanceFromRouteMeters: number;
+  progress: number;
+};
+
+/** Projects a live GPS fix onto the closest route segment. Distances are
+ * measured in meters while the returned shape index retains fractional segment
+ * progress so navigation can advance maneuvers without replaying the route. */
+export function nearestRoutePosition(
+  coordinates: Coordinate[],
+  location: Coordinate,
+): RoutePosition | null {
+  if (coordinates.length < 2) return null;
+  const { cumulative, total } = routeDistances(coordinates);
+  const longitudeScale = Math.max(
+    0.01,
+    Math.cos((location[1] * Math.PI) / 180),
+  );
+  let closest: RoutePosition | null = null;
+  for (let index = 1; index < coordinates.length; index += 1) {
+    const start = coordinates[index - 1]!;
+    const end = coordinates[index]!;
+    const startX = (start[0] - location[0]) * longitudeScale;
+    const startY = start[1] - location[1];
+    const segmentX = (end[0] - start[0]) * longitudeScale;
+    const segmentY = end[1] - start[1];
+    const lengthSquared = segmentX ** 2 + segmentY ** 2;
+    const segmentProgress =
+      lengthSquared === 0
+        ? 0
+        : Math.max(
+            0,
+            Math.min(
+              1,
+              -(startX * segmentX + startY * segmentY) / lengthSquared,
+            ),
+          );
+    const coordinate: Coordinate = [
+      start[0] + (end[0] - start[0]) * segmentProgress,
+      start[1] + (end[1] - start[1]) * segmentProgress,
+    ];
+    const distanceFromRouteMeters = haversineMeters(location, coordinate);
+    if (closest && distanceFromRouteMeters >= closest.distanceFromRouteMeters) {
+      continue;
+    }
+    const segmentMeters = cumulative[index]! - cumulative[index - 1]!;
+    const distanceAlongMeters =
+      cumulative[index - 1]! + segmentMeters * segmentProgress;
+    closest = {
+      coordinate,
+      segmentIndex: index - 1,
+      shapeIndex: index - 1 + segmentProgress,
+      distanceAlongMeters,
+      distanceFromRouteMeters,
+      progress: total > 0 ? distanceAlongMeters / total : 0,
+    };
+  }
+  return closest;
+}
+
 export function pointAtProgress(
   coordinates: Coordinate[],
   progress: number,

@@ -4,18 +4,30 @@ import { RoutePanel } from "./components/RoutePanel";
 import { SearchBar } from "./components/SearchBar";
 import { Icon } from "./components/Icon";
 import {
+  initialMapLocation,
+  type InitialMapLocation,
+} from "./initial-map-location";
+import {
   meaningfulPlaceCategories,
   meaningfulPlaceName,
   placeAddress,
 } from "./place-utils";
+import {
+  haversineMeters,
+  nearestRoutePosition,
+  routeDistances,
+} from "./route-utils";
 import type {
   ApiError,
+  Coordinate,
   DiscoveryPlace,
   InspectionState,
   MapSurface,
+  NavigationStatus,
   RouteMode,
   RouteResponse,
   SearchResult,
+  UserLocationFix,
   ViewBounds,
   Waypoint,
 } from "./types";
@@ -76,6 +88,22 @@ function placeEndpoint(
     : [...withoutRole, endpoint];
 }
 
+function routeCoordinates(route: RouteResponse | null): Coordinate[] {
+  return (route?.geometry?.coordinates ?? []).filter(
+    (coordinate): coordinate is Coordinate =>
+      Array.isArray(coordinate) &&
+      coordinate.length >= 2 &&
+      Number.isFinite(coordinate[0]) &&
+      Number.isFinite(coordinate[1]),
+  );
+}
+
+function offRouteThreshold(mode: RouteMode, accuracy: number | null) {
+  const base =
+    mode === "walk" ? 40 : mode === "bike" ? 55 : mode === "car" ? 70 : 80;
+  return Math.max(base, Math.min(100, (accuracy ?? 0) * 1.5));
+}
+
 export default function App() {
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [mode, setMode] = useState<RouteMode>("walk");
@@ -101,14 +129,34 @@ export default function App() {
   const [inspection, setInspection] = useState<InspectionState | null>(null);
   const [surface, setSurface] = useState<MapSurface>("mapsource");
   const [layersOpen, setLayersOpen] = useState(false);
+  const [initialLocation, setInitialLocation] =
+    useState<InitialMapLocation | null>(null);
   const [replayProgress, setReplayProgress] = useState(0);
   const [replaying, setReplaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState(1);
+  const [navigationActive, setNavigationActive] = useState(false);
+  const [navigationStatus, setNavigationStatus] =
+    useState<NavigationStatus>("idle");
+  const [navigationShapeIndex, setNavigationShapeIndex] = useState<
+    number | null
+  >(null);
+  const [navigationNextTurnMeters, setNavigationNextTurnMeters] = useState<
+    number | null
+  >(null);
   const animationRef = useRef<number | null>(null);
   const pendingEndpointRef = useRef<"origin" | "destination" | null>(null);
   const pendingCurrentLocationRef = useRef(false);
   const userLocationRef = useRef<{ lat: number; lon: number } | null>(null);
+  const userLocationFixRef = useRef<UserLocationFix | null>(null);
   const userLocationActiveRef = useRef(false);
+  const navigationActiveRef = useRef(false);
+  const routeRef = useRef<RouteResponse | null>(null);
+  const routeStateRef = useRef(routeState);
+  const waypointsRef = useRef<Waypoint[]>([]);
+  const modeRef = useRef<RouteMode>(mode);
+  const offRouteFixesRef = useRef(0);
+  const lastRerouteAtRef = useRef(0);
+  const needsNavigationOriginRef = useRef(false);
   const transportDiscoveryCategory =
     mode === "bus"
       ? "transit_stop"
@@ -131,8 +179,25 @@ export default function App() {
         : meaningfulPlaceCategories(inspection.place).join(" · ") || undefined;
     return { title, detail };
   }, [inspection]);
+
   useEffect(() => {
-    const preventGesture = (event: Event) => event.preventDefault();
+    routeRef.current = route;
+    routeStateRef.current = routeState;
+    waypointsRef.current = waypoints;
+    modeRef.current = mode;
+  }, [mode, route, routeState, waypoints]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    initialMapLocation(controller.signal)
+      .then((location) => {
+        if (location) setInitialLocation(location);
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
     const preventWheelZoom = (event: WheelEvent) => {
       if (event.ctrlKey) event.preventDefault();
     };
@@ -144,17 +209,9 @@ export default function App() {
         event.preventDefault();
       }
     };
-    document.addEventListener("gesturestart", preventGesture, {
-      passive: false,
-    });
-    document.addEventListener("gesturechange", preventGesture, {
-      passive: false,
-    });
     document.addEventListener("wheel", preventWheelZoom, { passive: false });
     document.addEventListener("keydown", preventKeyboardZoom);
     return () => {
-      document.removeEventListener("gesturestart", preventGesture);
-      document.removeEventListener("gesturechange", preventGesture);
       document.removeEventListener("wheel", preventWheelZoom);
       document.removeEventListener("keydown", preventKeyboardZoom);
     };
@@ -211,6 +268,11 @@ export default function App() {
         setRouteError(null);
         setReplayProgress(0);
         setReplaying(false);
+        navigationActiveRef.current = false;
+        setNavigationActive(false);
+        setNavigationStatus("idle");
+        setNavigationShapeIndex(null);
+        setNavigationNextTurnMeters(null);
       }, 0);
       return () => window.clearTimeout(resetTimer);
     }
@@ -242,6 +304,10 @@ export default function App() {
           setRouteState("ready");
           setReplayProgress(0);
           setReplaying(false);
+          if (navigationActiveRef.current) {
+            offRouteFixesRef.current = 0;
+            setNavigationStatus("navigating");
+          }
         })
         .catch((error: unknown) => {
           if (error instanceof DOMException && error.name === "AbortError")
@@ -252,6 +318,7 @@ export default function App() {
               ? error.message
               : "The route could not be calculated.",
           );
+          if (navigationActiveRef.current) setNavigationStatus("off-route");
         });
     }, 220);
     return () => {
@@ -493,31 +560,165 @@ export default function App() {
     [inspection?.place, waypoints],
   );
 
+  const stopNavigation = useCallback(() => {
+    navigationActiveRef.current = false;
+    needsNavigationOriginRef.current = false;
+    offRouteFixesRef.current = 0;
+    setNavigationActive(false);
+    setNavigationStatus("idle");
+    setNavigationShapeIndex(null);
+    setNavigationNextTurnMeters(null);
+  }, []);
+
+  const rerouteFromFix = useCallback((fix: UserLocationFix) => {
+    lastRerouteAtRef.current = Date.now();
+    offRouteFixesRef.current = 0;
+    setNavigationStatus("rerouting");
+    setWaypoints((current) => {
+      if (current.length < 2) return current;
+      const origin: Waypoint = {
+        ...current[0]!,
+        id: "current-location",
+        label: "Current location",
+        routeRole: "origin",
+        lat: fix.lat,
+        lon: fix.lon,
+      };
+      return [origin, ...current.slice(1)];
+    });
+  }, []);
+
+  const updateNavigationFromFix = useCallback(
+    (fix: UserLocationFix, alignOrigin = false) => {
+      const coordinates = routeCoordinates(routeRef.current);
+      const position = nearestRoutePosition(coordinates, [fix.lon, fix.lat]);
+      if (!position) return;
+
+      setReplayProgress(Math.max(0, Math.min(1, position.progress)));
+      setNavigationShapeIndex(position.shapeIndex);
+      const distances = routeDistances(coordinates);
+      const nextManeuver = routeRef.current?.maneuvers?.find(
+        (maneuver) => (maneuver.shapeIndex ?? 0) > position.shapeIndex + 0.001,
+      );
+      const nextShapeIndex = Math.max(
+        0,
+        Math.min(
+          coordinates.length - 1,
+          Math.round(nextManeuver?.shapeIndex ?? coordinates.length - 1),
+        ),
+      );
+      setNavigationNextTurnMeters(
+        Math.max(
+          0,
+          (distances.cumulative[nextShapeIndex] ?? distances.total) -
+            position.distanceAlongMeters,
+        ),
+      );
+
+      const destination = coordinates[coordinates.length - 1]!;
+      const arrivalThreshold = Math.max(18, Math.min(35, fix.accuracy ?? 18));
+      if (
+        haversineMeters([fix.lon, fix.lat], destination) <= arrivalThreshold
+      ) {
+        setReplayProgress(1);
+        setNavigationStatus("arrived");
+        offRouteFixesRef.current = 0;
+        return;
+      }
+
+      if (alignOrigin) {
+        needsNavigationOriginRef.current = false;
+        const origin = waypointsRef.current[0];
+        if (
+          origin &&
+          haversineMeters([origin.lon, origin.lat], [fix.lon, fix.lat]) > 20
+        ) {
+          rerouteFromFix(fix);
+          return;
+        }
+      }
+
+      if (routeStateRef.current !== "ready" || (fix.accuracy ?? 0) > 100) {
+        return;
+      }
+      if (
+        position.distanceFromRouteMeters <=
+        offRouteThreshold(modeRef.current, fix.accuracy)
+      ) {
+        offRouteFixesRef.current = 0;
+        setNavigationStatus("navigating");
+        return;
+      }
+
+      offRouteFixesRef.current += 1;
+      setNavigationStatus("off-route");
+      if (
+        offRouteFixesRef.current >= 2 &&
+        Date.now() - lastRerouteAtRef.current >= 8_000
+      ) {
+        rerouteFromFix(fix);
+      }
+    },
+    [rerouteFromFix],
+  );
+
+  const handleUserLocation = useCallback(
+    (fix: UserLocationFix) => {
+      const coordinate = { lat: fix.lat, lon: fix.lon };
+      userLocationRef.current = coordinate;
+      userLocationFixRef.current = fix;
+      if (pendingCurrentLocationRef.current) {
+        pendingCurrentLocationRef.current = false;
+        setWaypoints((current) =>
+          placeEndpoint(current, "origin", {
+            id: newId(),
+            label: "Current location",
+            ...coordinate,
+          }),
+        );
+      }
+      if (!navigationActiveRef.current) return;
+      updateNavigationFromFix(fix, needsNavigationOriginRef.current);
+    },
+    [updateNavigationFromFix],
+  );
+
+  const startNavigation = useCallback(() => {
+    if (routeCoordinates(routeRef.current).length < 2) return;
+    setReplaying(false);
+    navigationActiveRef.current = true;
+    needsNavigationOriginRef.current = true;
+    offRouteFixesRef.current = 0;
+    setNavigationActive(true);
+    setNavigationStatus(userLocationFixRef.current ? "navigating" : "locating");
+    if (userLocationFixRef.current) {
+      updateNavigationFromFix(userLocationFixRef.current, true);
+    }
+    if (!userLocationActiveRef.current) {
+      document
+        .querySelector<HTMLButtonElement>(".maplibregl-ctrl-geolocate")
+        ?.click();
+    } else {
+      window.dispatchEvent(new Event("mapsource:recenter"));
+    }
+  }, [updateNavigationFromFix]);
+
   return (
     <main className="app-shell">
       <MapCanvas
         activeDiscovery={mapDiscoveryCategory}
         discoveryPlaces={discoveryPlaces}
         heldPointDetails={heldPointDetails}
+        initialLocation={initialLocation}
         mode={mode}
+        navigationActive={navigationActive}
         onBoundsChange={setViewBounds}
         onCenterChange={setCenter}
         onAddIntermediate={addIntermediatePoint}
         onInspectPoint={inspectPoint}
         onMapPick={pickWaypoint}
         onNavigatePoint={navigateToPoint}
-        onUserLocation={(coordinate) => {
-          userLocationRef.current = coordinate;
-          if (!pendingCurrentLocationRef.current) return;
-          pendingCurrentLocationRef.current = false;
-          setWaypoints((current) =>
-            placeEndpoint(current, "origin", {
-              id: newId(),
-              label: "Current location",
-              ...coordinate,
-            }),
-          );
-        }}
+        onUserLocation={handleUserLocation}
         onUserTrackingChange={(active) => {
           userLocationActiveRef.current = active;
         }}
@@ -591,6 +792,10 @@ export default function App() {
         inspection={inspection}
         focusOriginSelection={selectedWaypointId === "pending-origin"}
         mode={mode}
+        navigationActive={navigationActive}
+        navigationNextTurnMeters={navigationNextTurnMeters}
+        navigationShapeIndex={navigationShapeIndex}
+        navigationStatus={navigationStatus}
         onAddInspection={() => {
           if (inspection) addIntermediatePoint(inspection.coordinate);
         }}
@@ -646,6 +851,7 @@ export default function App() {
           setDiscoveryPlaces([]);
         }}
         onEndRoute={() => {
+          stopNavigation();
           setWaypoints([]);
           setRoute(null);
           setRouteState("idle");
@@ -691,18 +897,22 @@ export default function App() {
           );
         }}
         onReplayProgress={(progress) => {
+          stopNavigation();
           setReplayProgress(progress);
           setReplaying(false);
         }}
         onReplayRestart={() => {
+          stopNavigation();
           setReplayProgress(0);
           setReplaying(true);
         }}
         onReplaySpeed={setReplaySpeed}
         onReplayToggle={() => {
+          stopNavigation();
           if (replayProgress >= 1) setReplayProgress(0);
           setReplaying((value) => !value);
         }}
+        onStartNavigation={startNavigation}
         onReorder={reorder}
         replayProgress={replayProgress}
         replaySpeed={replaySpeed}

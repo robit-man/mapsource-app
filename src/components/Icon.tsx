@@ -30,7 +30,11 @@ type IconName =
   | "park"
   | "phone"
   | "globe"
-  | "arrow";
+  | "arrow"
+  | "straight"
+  | "turnLeft"
+  | "turnRight"
+  | "uTurn";
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, React.ReactNode> = {
@@ -200,6 +204,10 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
         <path d="M5 12h14M14 7l5 5-5 5" />
       </>
     ),
+    straight: <path d="M12 21V4M6.5 9.5 12 4l5.5 5.5" />,
+    turnLeft: <path d="M20 19v-4a6 6 0 0 0-6-6H5M10 4 5 9l5 5" />,
+    turnRight: <path d="M4 19v-4a6 6 0 0 1 6-6h9M14 4l5 5-5 5" />,
+    uTurn: <path d="M18 20V10a6 6 0 0 0-12 0v5M2 11l4 4 4-4" />,
   };
   return (
     <svg

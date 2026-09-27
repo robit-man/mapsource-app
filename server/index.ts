@@ -249,6 +249,37 @@ app.get("/health/ready", async (_request, reply) => {
   }
 });
 
+app.get(
+  "/api/location",
+  { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+  async (request, reply) => {
+    const headers = new Headers({ accept: "application/json" });
+    for (const name of [
+      "cf-connecting-ip",
+      "cf-connecting-ipv6",
+      "cf-iplatitude",
+      "cf-iplongitude",
+      "cf-ipcity",
+      "cf-region",
+      "cf-region-code",
+      "cf-ipcountry",
+    ]) {
+      const value = request.headers[name];
+      if (typeof value === "string" && value.length <= 200) {
+        headers.set(name, value);
+      }
+    }
+    const response = await fetch(`${mapsourceOrigin}/api/location`, {
+      headers,
+      signal: AbortSignal.timeout(4_000),
+    });
+    const body = await response.json().catch(() => undefined);
+    reply.header("cache-control", "private, no-store");
+    if (!response.ok) return apiFailure(reply, response.status, body);
+    return body;
+  },
+);
+
 app.get<{ Querystring: { q?: string; lat?: string; lon?: string } }>(
   "/api/search",
   {

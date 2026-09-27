@@ -89,7 +89,10 @@ export function SearchBar({
           value={query}
         />
         {status === "loading" && (
-          <span aria-label="Searching" className="search-spinner" />
+          <span
+            aria-label="Searching"
+            className="search-spinner search-spinner--bar"
+          />
         )}
         {query && status !== "loading" && (
           <button

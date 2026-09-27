@@ -1,5 +1,10 @@
 # Mapsource app interaction work queue
 
+> The itemized canonical intake ledger is
+> [`docs/app-request-todo.md`](./app-request-todo.md). This older acceptance
+> view remains for grouped browser contracts; new requests and implementation
+> status must be recorded in the canonical ledger first.
+
 This is the durable acceptance queue for the `app.mapsource.io` implementation.
 An item is checked when its source change and focused browser contract pass.
 The separate release gate records full validation, loopback deployment, live
@@ -8,6 +13,9 @@ corresponding behavior.
 
 ## Release gate
 
+- [x] The standalone app repository exists adjacent to the Mapsource SDK and is
+      served at `app.mapsource.io` by an enabled, restart-on-failure systemd
+      service that starts again after host reboot.
 - [x] `npm run validate` passes from a clean production build.
 - [x] `npm audit --audit-level=high` reports no high/critical findings.
 - [x] `scripts/deployment-check.mjs` passes against an isolated production build
@@ -35,6 +43,9 @@ live and device checks.
 | 2026-09-26 | Boot persistence            | systemd unit state and target-link verification                | Pass: base, app, and tunnel enabled; app active with `Restart=always`; multi-user target link resolves correctly   |
 | 2026-09-26 | Live visual inspection      | 1440×900 desktop and Pixel 7 viewports                         | Pass: map, route, controls, action sheet, typography, terrain, attribution, and responsive containment inspected   |
 | 2026-09-26 | Hosted release gate         | GitHub Actions run `36300561921` for `608a782`                 | Pass: clean install, Playwright browser install, full validation, and dependency audit                             |
+| 2026-09-27 | Current full source gate    | `npm run validate`; `npm audit --audit-level=high`             | Pass: formatting, lint, TypeScript, 14 unit tests, clean build, 30 applicable browser tests, and 0 vulnerabilities |
+| 2026-09-27 | Built/supervised/live APIs  | `npm run deploy:check` against ports 3224, 3220, and public    | Pass: five styles, previews, tile classes, transit discovery, five route modes, and satellite                      |
+| 2026-09-27 | Live navigation interaction | `npm run deploy:check:interaction` against the public origin   | Pass: IP focus, live GPS progress, maneuver arrow, style continuity, pinch detach, Recenter, and automatic reroute |
 | Pending    | Device sensors              | physical iOS/Android heading and calibration exercise          | Not yet run                                                                                                        |
 
 Focused browser contracts live in `tests/e2e/app.spec.ts`. They cover location
@@ -65,6 +76,9 @@ real-backend contract for styles, tiles, previews, and route modes.
 - [x] Show real preview imagery for every layer without broken-image/question
       icons; previews are nested rounded cards, not pills.
 - [x] Preserve center, zoom, bearing, and pitch across style changes.
+- [x] Crossfade surface changes without dropping active device-location
+      following. Preserve a deliberately detached camera across the change and
+      resume follow only when it was active before the new style loaded.
 - [x] Rehydrate active route geometry, traveled progress, waypoint connectors,
       and the selected-building extrusion immediately after a style change.
 - [x] Preserve 3D terrain on Mapsource, dark, light, elevation, and satellite.
@@ -87,10 +101,17 @@ real-backend contract for styles, tiles, previews, and route modes.
       stops; train mode loads mapped railway stations and emphasizes the vector
       railway/light-rail network rather than relying on labels alone.
 - [x] Keep all five mode controls simultaneously visible/selectable on mobile.
-- [ ] Verify live geometry for every mode; car uses `auto`, bus/train use the
+- [x] Verify live geometry for every mode; car uses `auto`, bus/train use the
       available `bus` network profile, bike uses `bicycle`, and walk uses
       `pedestrian`.
 - [x] Route replay supports progress, play/pause, restart, and speed.
+- [x] Make `Start route` enter live GPS navigation instead of simulated replay;
+      advance progress from movement and replace the generic route glyph with a
+      direction-specific straight, left, right, or U-turn arrow for the actual
+      next action.
+- [x] Detect sustained, accuracy-aware route deviation and automatically
+      rebuild the route from the current position without forcing a detached
+      camera back into follow mode.
 
 ## Mobile action sheet
 
@@ -130,9 +151,14 @@ or search`.
       starts on a pin must pan the map exactly like a drag on ordinary map
       space, preventing accidental route edits. The browser contract also
       verifies that arming does not introduce a pointer-to-pin jump.
+- [ ] Keep a selected A/B/intermediate map pin anchored at its geographic tip
+      when its visual enlarges; scaling must never move the label away from the
+      selected coordinate.
 
 ## Search and visible-place discovery
 
+- [x] Keep the search loading spinner perfectly circular and inset from the
+      pill's right edge by the same distance as its top and bottom edges.
 - [x] Expanded search fades in nearby category actions for food, coffee,
       shopping, groceries, pharmacy, fuel, lodging, and parks.
 - [x] Category actions populate search, query the visible region, fit results
@@ -161,6 +187,9 @@ or search`.
 - [x] Select only the smallest exact building footprint, render the highlight
       on its 3D extrusion, and resolve details from its address/centroid rather
       than reverse-geocoding the visually displaced facade pixel.
+- [x] Resolve house number plus street for residential buildings through the
+      full local geocoder path; coordinates are a subtitle/fallback and must not
+      replace an available postal address.
 - [x] Keep travel-mode headers concise (`Walk`, `Bike`, `Car`, and so on)
       without redundant `plan` wording.
 - [x] Use the resolved street address as the selected-building heading, keep
@@ -172,7 +201,7 @@ or search`.
 
 ## Location and heading
 
-- [ ] On the first page load, resolve the visitor's approximate region through
+- [x] On the first page load, resolve the visitor's approximate region through
       Mapsource's existing `/api/location` IP-location endpoint and focus the
       map there before nearby/topographic context is presented. Preserve the
       current default camera as the privacy-safe fallback when lookup fails,
@@ -184,6 +213,10 @@ or search`.
 - [x] Keep map zoom user-controlled while location/heading tracking is active;
       preserve the selected zoom across sensor updates and keep the location
       anchored at the visible-region center after zooming.
+- [x] Treat device location and camera following as independent states: allow
+      pinch/drag/rotate while location and navigation remain live, keep the
+      position marker updating off-camera, and show a nearby `Recenter` control
+      beside the location button until follow mode is restored.
 - [x] Use tilt-compensated absolute orientation, screen rotation compensation,
       circular smoothing, poor-accuracy rejection, GPS course while moving, and
       nearest-route bearing fallback.

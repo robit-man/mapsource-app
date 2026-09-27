@@ -78,6 +78,21 @@ summary:focus-visible {
   inset: 0;
 }
 
+.map-canvas::before {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  content: "";
+  background: rgba(16, 19, 16, 0.5);
+  opacity: 0;
+  transition: opacity 260ms ease;
+}
+
+.map-canvas.is-switching-surface::before {
+  opacity: 1;
+}
+
 .map-canvas::after {
   position: absolute;
   inset: 0;
@@ -93,6 +108,37 @@ summary:focus-visible {
       transparent 72%,
       rgba(9, 11, 9, 0.26)
     );
+}
+
+.map-recenter {
+  position: absolute;
+  z-index: 8;
+  min-height: 32px;
+  padding: 0 13px;
+  color: var(--ink);
+  pointer-events: none;
+  visibility: hidden;
+  background: var(--lime);
+  border: 1px solid rgba(16, 19, 16, 0.24);
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.34);
+  opacity: 0;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 750;
+  transform: translateX(7px) scale(0.96);
+  transition:
+    opacity 160ms ease,
+    transform 180ms cubic-bezier(0.2, 0.85, 0.25, 1.15),
+    visibility 0s linear 180ms;
+}
+
+.map-recenter.is-visible {
+  pointer-events: auto;
+  visibility: visible;
+  opacity: 1;
+  transform: translateX(0) scale(1);
+  transition-delay: 0s;
 }
 
 .map-atmosphere {
@@ -125,6 +171,7 @@ summary:focus-visible {
 }
 
 .search-bar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -217,12 +264,35 @@ summary:focus-visible {
 }
 
 .search-spinner {
+  position: relative;
+  display: inline-block;
   width: 16px;
+  min-width: 16px;
   height: 16px;
+  min-height: 16px;
+  flex: 0 0 16px;
+  padding: 0;
+  aspect-ratio: 1;
+  box-sizing: border-box;
+}
+
+.search-spinner::before {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  content: "";
   border: 2px solid rgba(216, 237, 157, 0.18);
   border-top-color: var(--lime);
   border-radius: 50%;
   animation: spin 700ms linear infinite;
+}
+
+.search-spinner--bar {
+  position: absolute;
+  top: 50%;
+  right: 17px;
+  margin: 0;
+  translate: 0 -50%;
 }
 
 @keyframes spin {
@@ -448,6 +518,25 @@ summary:focus-visible {
   color: #ed987d;
   background: rgba(237, 152, 125, 0.08);
   border-color: rgba(237, 152, 125, 0.18);
+}
+
+.live-indicator.is-off-route,
+.live-indicator.is-rerouting {
+  color: #f2b08e;
+  background: rgba(197, 91, 52, 0.1);
+  border-color: rgba(242, 176, 142, 0.24);
+}
+
+.live-indicator.is-navigating span,
+.live-indicator.is-rerouting span {
+  animation: navigation-pulse 1.35s ease-in-out infinite;
+}
+
+@keyframes navigation-pulse {
+  50% {
+    opacity: 0.42;
+    transform: scale(0.72);
+  }
 }
 
 .mode-switch {
@@ -1787,6 +1876,10 @@ summary:focus-visible {
     border-radius: 999px;
   }
 
+  .search-spinner--bar {
+    right: 14px;
+  }
+
   .search-bar input,
   .stop-row input {
     font-size: 16px;
@@ -2066,6 +2159,13 @@ summary:focus-visible {
     font-weight: 720;
     letter-spacing: 0.04em;
     text-transform: uppercase;
+  }
+
+  .minimized-route-actions button:disabled {
+    color: var(--lime);
+    background: rgba(216, 237, 157, 0.1);
+    border: 1px solid rgba(216, 237, 157, 0.2);
+    opacity: 1;
   }
 
   .minimized-route-actions button:last-child {

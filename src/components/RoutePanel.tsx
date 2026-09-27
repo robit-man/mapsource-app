@@ -18,6 +18,7 @@ import {
 import { elevationPath, formatDistance, formatDuration } from "../route-utils";
 import type {
   InspectionState,
+  NavigationStatus,
   RouteMode,
   RouteResponse,
   SearchResult,
@@ -30,6 +31,10 @@ type RoutePanelProps = {
   focusOriginSelection: boolean;
   inspection: InspectionState | null;
   mode: RouteMode;
+  navigationActive: boolean;
+  navigationStatus: NavigationStatus;
+  navigationShapeIndex: number | null;
+  navigationNextTurnMeters: number | null;
   onAddInspection: () => void;
   onCloseInspection: () => void;
   onEndRoute: () => void;
@@ -55,6 +60,7 @@ type RoutePanelProps = {
   onReplayToggle: () => void;
   onReplayRestart: () => void;
   onReplaySpeed: (speed: number) => void;
+  onStartNavigation: () => void;
 };
 
 type ModeIcon = "walk" | "bike" | "car" | "bus" | "train";
@@ -148,10 +154,31 @@ function safeExternalWebsite(value: string | undefined) {
   }
 }
 
+function navigationLabel(status: NavigationStatus) {
+  if (status === "locating") return "Locating";
+  if (status === "off-route") return "Off route";
+  if (status === "rerouting") return "Rerouting";
+  if (status === "arrived") return "Arrived";
+  return "Navigating";
+}
+
+function maneuverIcon(instruction: string | undefined) {
+  const value = instruction?.toLowerCase() ?? "";
+  if (value.includes("u-turn") || value.includes("uturn")) return "uTurn";
+  if (value.includes("left")) return "turnLeft";
+  if (value.includes("right")) return "turnRight";
+  if (value.includes("arrive") || value.includes("destination")) return "pin";
+  return "straight";
+}
+
 export function RoutePanel({
   focusOriginSelection,
   inspection,
   mode,
+  navigationActive,
+  navigationStatus,
+  navigationShapeIndex,
+  navigationNextTurnMeters,
   onAddInspection,
   onCloseInspection,
   onEndRoute,
@@ -177,6 +204,7 @@ export function RoutePanel({
   onReplayToggle,
   onReplayRestart,
   onReplaySpeed,
+  onStartNavigation,
 }: RoutePanelProps) {
   const [sheetMode, setSheetMode] = useState<SheetMode>("half");
   const [sheetHeight, setSheetHeight] = useState<number>();
@@ -438,14 +466,21 @@ export function RoutePanel({
   const routeDistance = route?.summary?.distanceKm;
   const routeDuration = route?.summary?.durationSeconds;
   const routeCoordinateCount = route?.geometry?.coordinates?.length ?? 0;
-  const replayShapeIndex = Math.round(
-    replayProgress * Math.max(0, routeCoordinateCount - 1),
-  );
+  const replayShapeIndex =
+    navigationActive && navigationShapeIndex !== null
+      ? navigationShapeIndex
+      : Math.round(replayProgress * Math.max(0, routeCoordinateCount - 1));
   const maneuvers = route?.maneuvers ?? [];
   const nextManeuver =
     maneuvers.find(
-      (maneuver) => (maneuver.shapeIndex ?? 0) >= replayShapeIndex,
+      (maneuver) =>
+        (maneuver.shapeIndex ?? 0) >=
+        replayShapeIndex + (navigationActive ? 0.001 : 0),
     ) ?? maneuvers[maneuvers.length - 1];
+  const nextTurnDistanceKm =
+    navigationActive && navigationNextTurnMeters !== null
+      ? navigationNextTurnMeters / 1000
+      : nextManeuver?.distanceKm;
   const compactMetrics = [
     { label: "Distance", value: formatDistance(routeDistance) },
     { label: "Time", value: formatDuration(routeDuration) },
@@ -488,6 +523,8 @@ export function RoutePanel({
   return (
     <aside
       className={`route-panel glass sheet--${presentedSheetMode} ${presentedSheetMode !== "minimized" ? "is-open" : ""} ${presentedSheetMode === "expanded" ? "is-expanded" : ""} ${inspection ? "has-inspection" : ""} ${sheetDragging ? "is-dragging-sheet" : ""}`}
+      data-navigation-progress={replayProgress.toFixed(4)}
+      data-navigation-status={navigationStatus}
       data-sheet-mode={presentedSheetMode}
       aria-label="Route planner"
       style={panelStyle}
@@ -519,16 +556,18 @@ export function RoutePanel({
           <h1>{modeInfo.title}</h1>
         </div>
         <div
-          className={`live-indicator ${routeState === "error" ? "is-error" : ""}`}
+          className={`live-indicator ${routeState === "error" ? "is-error" : ""} ${navigationActive ? `is-${navigationStatus}` : ""}`}
         >
           <span />{" "}
-          {routeState === "loading"
-            ? "Routing"
-            : routeState === "error"
-              ? "Retry"
-              : routeState === "ready"
-                ? "Live"
-                : "Plan"}
+          {navigationActive
+            ? navigationLabel(navigationStatus)
+            : routeState === "loading"
+              ? "Routing"
+              : routeState === "error"
+                ? "Retry"
+                : routeState === "ready"
+                  ? "Live"
+                  : "Plan"}
         </div>
       </header>
 
@@ -629,22 +668,42 @@ export function RoutePanel({
         </div>
         {sheetMode === "minimized" && (
           <div className="minimized-next-turn">
-            <span className="minimized-next-turn__icon">
-              <Icon name="route" size={15} />
+            <span
+              className="minimized-next-turn__icon"
+              data-maneuver-icon={maneuverIcon(nextManeuver?.instruction)}
+            >
+              <Icon name={maneuverIcon(nextManeuver?.instruction)} size={17} />
             </span>
             <span>
-              <small>Next turn</small>
-              <strong>{nextManeuver?.instruction ?? "Route ready"}</strong>
+              <small>
+                {navigationStatus === "rerouting"
+                  ? "Rerouting"
+                  : navigationStatus === "off-route"
+                    ? "Off route"
+                    : navigationStatus === "arrived"
+                      ? "Arrival"
+                      : "Next turn"}
+              </small>
+              <strong>
+                {navigationStatus === "rerouting"
+                  ? "Calculating a new route…"
+                  : navigationStatus === "off-route"
+                    ? "Return to the route or continue for rerouting"
+                    : navigationStatus === "arrived"
+                      ? "You have arrived"
+                      : (nextManeuver?.instruction ?? "Route ready")}
+              </strong>
             </span>
-            {nextManeuver?.distanceKm !== undefined && (
-              <b>{formatDistance(nextManeuver.distanceKm)}</b>
-            )}
+            {nextTurnDistanceKm !== undefined &&
+              navigationStatus !== "rerouting" && (
+                <b>{formatDistance(nextTurnDistanceKm)}</b>
+              )}
           </div>
         )}
         {sheetMode === "minimized" && (
           <div
             ref={progressRailRef}
-            aria-label={`Route replay progress ${Math.round(replayProgress * 100)}%`}
+            aria-label={`Route ${navigationActive ? "navigation" : "replay"} progress ${Math.round(replayProgress * 100)}%`}
             className="minimized-route-progress"
           >
             <div
@@ -679,9 +738,15 @@ export function RoutePanel({
         )}
         {sheetMode === "minimized" && route && (
           <div className="minimized-route-actions">
-            <button onClick={onReplayRestart} type="button">
-              <Icon name="play" size={13} />
-              Start route
+            <button
+              disabled={navigationActive}
+              onClick={onStartNavigation}
+              type="button"
+            >
+              <Icon name={navigationActive ? "locate" : "play"} size={13} />
+              {navigationActive
+                ? navigationLabel(navigationStatus)
+                : "Start route"}
             </button>
             <button onClick={onEndRoute} type="button">
               <Icon name="close" size={13} />

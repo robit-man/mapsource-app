@@ -25,12 +25,14 @@ import {
   nearestRouteBearing,
   pointAtProgress,
 } from "../route-utils";
+import type { InitialMapLocation } from "../initial-map-location";
 import type {
   Coordinate,
   DiscoveryPlace,
   MapSurface,
   RouteMode,
   RouteResponse,
+  UserLocationFix,
   ViewBounds,
   Waypoint,
 } from "../types";
@@ -41,7 +43,9 @@ type MapCanvasProps = {
   waypoints: Waypoint[];
   route: RouteResponse | null;
   heldPointDetails: { title: string; detail?: string } | null;
+  initialLocation: InitialMapLocation | null;
   mode: RouteMode;
+  navigationActive: boolean;
   selectedWaypointId: string | null;
   onWaypointMove: (
     id: string,
@@ -58,7 +62,7 @@ type MapCanvasProps = {
     coordinate: { lat: number; lon: number },
     userLocation: { lat: number; lon: number } | null,
   ) => void;
-  onUserLocation: (coordinate: { lat: number; lon: number }) => void;
+  onUserLocation: (fix: UserLocationFix) => void;
   onUserTrackingChange: (active: boolean) => void;
   onCenterChange: (coordinate: { lat: number; lon: number }) => void;
   surface: MapSurface;
@@ -600,7 +604,9 @@ export function MapCanvas({
   waypoints,
   route,
   heldPointDetails,
+  initialLocation,
   mode,
+  navigationActive,
   selectedWaypointId,
   onWaypointMove,
   onMapPick,
@@ -642,11 +648,15 @@ export function MapCanvas({
   const replayingRef = useRef(replaying);
   const heldBuildingRef = useRef<BuildingSelection | null>(null);
   const userTrackingRef = useRef(false);
+  const userFollowingRef = useRef(false);
+  const userCameraInteractedRef = useRef(false);
+  const initialLocationAppliedRef = useRef(false);
   const deviceHeadingRef = useRef<number | null>(null);
   const gpsCourseRef = useRef<number | null>(null);
   const latestUserLocationRef = useRef<Coordinate | null>(null);
   const loadedSurfaceRef = useRef(surface);
   const pendingCameraRef = useRef<CameraSnapshot | null>(null);
+  const resumeFollowAfterStyleRef = useRef(false);
   const preserveCameraForRouteRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [heldPoint, setHeldPoint] = useState<Coordinate | null>(null);
@@ -703,10 +713,12 @@ export function MapCanvas({
       pitch: 42,
       bearing: -18,
       maxPitch: 70,
+      fadeDuration: 520,
       attributionControl: false,
       cooperativeGestures: false,
     });
     mapRef.current = map;
+    map.touchZoomRotate.enable();
     const attribution = new AttributionControl({
       compact: true,
       customAttribution: [
@@ -724,13 +736,44 @@ export function MapCanvas({
       trackUserLocation: true,
     });
     map.addControl(geolocate, "bottom-right");
+    const recenterButton = document.createElement("button");
+    recenterButton.type = "button";
+    recenterButton.className = "map-recenter";
+    recenterButton.textContent = "Recenter";
+    recenterButton.ariaLabel = "Recenter on current location";
+    containerRef.current.append(recenterButton);
     let attributionAdded = false;
     let userFocusSequence = 0;
     let userZooming = false;
-    let trackingBeforeUserZoom = false;
     let hasInitialUserFocus = false;
-    let zoomFocusFrame: number | null = null;
     let panelFocusFrame: number | null = null;
+    let surfaceTransitionTimer: number | null = null;
+
+    const positionRecenterButton = () => {
+      const container = containerRef.current;
+      const locationButton = container?.querySelector<HTMLElement>(
+        ".maplibregl-ctrl-geolocate",
+      );
+      if (!container || !locationButton) return;
+      const containerBox = container.getBoundingClientRect();
+      const locationBox = locationButton.getBoundingClientRect();
+      recenterButton.style.top = `${locationBox.top - containerBox.top + (locationBox.height - recenterButton.offsetHeight) / 2}px`;
+      recenterButton.style.right = `${containerBox.right - locationBox.left + 9}px`;
+    };
+
+    const setCameraFollowing = (following: boolean) => {
+      userFollowingRef.current = following;
+      recenterButton.classList.toggle(
+        "is-visible",
+        userTrackingRef.current && !following,
+      );
+      if (containerRef.current) {
+        containerRef.current.dataset.cameraFollowing = following
+          ? "active"
+          : "detached";
+      }
+      if (!following) window.requestAnimationFrame(positionRecenterButton);
+    };
 
     const updateGeolocateCameraContract = (preserveZoom: boolean) => {
       const target = visibleMapFocusTarget(map);
@@ -760,7 +803,7 @@ export function MapCanvas({
       positionHeading?: number | null,
       positionSpeed?: number | null,
     ) => {
-      if (!userTrackingRef.current || replayingRef.current || userZooming)
+      if (!userFollowingRef.current || replayingRef.current || userZooming)
         return;
       const routeBearing = nearestRouteBearing(
         routeCoordinates(routeRef.current),
@@ -838,15 +881,20 @@ export function MapCanvas({
       if (location) orientToUser(location);
     };
 
+    const recenterOnUser = () => {
+      if (!userTrackingRef.current) geolocate.trigger();
+      setCameraFollowing(true);
+      refocusTrackedUser();
+    };
+    recenterButton.addEventListener("click", recenterOnUser);
+    window.addEventListener("mapsource:recenter", recenterOnUser);
+
     const handleZoomStart = (event: { originalEvent?: unknown }) => {
       if (!event.originalEvent) return;
-      trackingBeforeUserZoom = userTrackingRef.current;
+      userCameraInteractedRef.current = true;
       userZooming = true;
       userFocusSequence += 1;
-      if (zoomFocusFrame !== null) {
-        window.cancelAnimationFrame(zoomFocusFrame);
-        zoomFocusFrame = null;
-      }
+      if (userTrackingRef.current) setCameraFollowing(false);
     };
     const handleZoom = () => {
       if (!userZooming) return;
@@ -856,35 +904,26 @@ export function MapCanvas({
       if (!userZooming) return;
       userZooming = false;
       updateGeolocateCameraContract(true);
-      const locationButton = containerRef.current?.querySelector<HTMLElement>(
-        ".maplibregl-ctrl-geolocate",
-      );
-      if (
-        trackingBeforeUserZoom &&
-        !userTrackingRef.current &&
-        locationButton?.classList.contains(
-          "maplibregl-ctrl-geolocate-background",
-        )
-      ) {
-        geolocate.trigger();
-      }
-      trackingBeforeUserZoom = false;
       if (containerRef.current) {
         containerRef.current.dataset.userZoom = map.getZoom().toFixed(2);
       }
-      zoomFocusFrame = window.requestAnimationFrame(() => {
-        zoomFocusFrame = null;
-        refocusTrackedUser();
-      });
+    };
+    const handleManualCameraStart = (event: { originalEvent?: unknown }) => {
+      if (!event.originalEvent) return;
+      userCameraInteractedRef.current = true;
+      if (userTrackingRef.current) setCameraFollowing(false);
     };
     map.on("zoomstart", handleZoomStart);
     map.on("zoom", handleZoom);
     map.on("zoomend", handleZoomEnd);
+    map.on("dragstart", handleManualCameraStart);
+    map.on("rotatestart", handleManualCameraStart);
+    map.on("pitchstart", handleManualCameraStart);
 
     const panel = document.querySelector<HTMLElement>(".route-panel");
     const panelObserver = new ResizeObserver(() => {
       updateGeolocateCameraContract(hasInitialUserFocus);
-      if (!userTrackingRef.current || userZooming) return;
+      if (!userFollowingRef.current || userZooming) return;
       if (panelFocusFrame !== null) {
         window.cancelAnimationFrame(panelFocusFrame);
       }
@@ -1088,6 +1127,7 @@ export function MapCanvas({
 
     geolocate.on("trackuserlocationstart", () => {
       userTrackingRef.current = true;
+      setCameraFollowing(true);
       onUserTrackingChangeRef.current(true);
       if (containerRef.current) {
         containerRef.current.dataset.userTracking = "active";
@@ -1098,6 +1138,7 @@ export function MapCanvas({
     });
     geolocate.on("userlocationfocus", () => {
       userTrackingRef.current = true;
+      setCameraFollowing(true);
       onUserTrackingChangeRef.current(true);
       if (containerRef.current) {
         containerRef.current.dataset.userTracking = "active";
@@ -1106,10 +1147,11 @@ export function MapCanvas({
       if (location) orientToUser(location);
     });
     geolocate.on("trackuserlocationend", () => {
-      userTrackingRef.current = false;
-      onUserTrackingChangeRef.current(false);
+      setCameraFollowing(false);
       if (containerRef.current) {
-        containerRef.current.dataset.userTracking = "inactive";
+        containerRef.current.dataset.userTracking = userTrackingRef.current
+          ? "active"
+          : "inactive";
       }
     });
     geolocate.on("geolocate", (event) => {
@@ -1129,7 +1171,18 @@ export function MapCanvas({
         }
       }
       latestUserLocationRef.current = location;
-      onUserLocationRef.current({ lat: location[1], lon: location[0] });
+      userTrackingRef.current = true;
+      onUserTrackingChangeRef.current(true);
+      if (containerRef.current) {
+        containerRef.current.dataset.userTracking = "active";
+      }
+      onUserLocationRef.current({
+        lat: location[1],
+        lon: location[0],
+        accuracy: Number.isFinite(event.coords.accuracy)
+          ? event.coords.accuracy
+          : null,
+      });
       const positionHeading = event.coords.heading;
       const positionSpeed = event.coords.speed;
       window.requestAnimationFrame(() => {
@@ -1139,7 +1192,10 @@ export function MapCanvas({
       });
     });
 
-    map.on("styledataloading", () => setReady(false));
+    map.on("styledataloading", () => {
+      setReady(false);
+      containerRef.current?.classList.add("is-switching-surface");
+    });
     map.on("style.load", () => {
       const before = firstSymbolLayer(map);
       map.addSource("satellite", {
@@ -1419,6 +1475,17 @@ export function MapCanvas({
       }
       closeAttribution(containerRef.current);
       setReady(true);
+      if (surfaceTransitionTimer !== null) {
+        window.clearTimeout(surfaceTransitionTimer);
+      }
+      surfaceTransitionTimer = window.setTimeout(() => {
+        containerRef.current?.classList.remove("is-switching-surface");
+        surfaceTransitionTimer = null;
+      }, 260);
+      if (resumeFollowAfterStyleRef.current) {
+        resumeFollowAfterStyleRef.current = false;
+        window.requestAnimationFrame(recenterOnUser);
+      }
     });
     window.requestAnimationFrame(() => {
       closeAttribution(containerRef.current);
@@ -1455,16 +1522,22 @@ export function MapCanvas({
       if (orientationFocusFrame !== null) {
         window.cancelAnimationFrame(orientationFocusFrame);
       }
-      if (zoomFocusFrame !== null) {
-        window.cancelAnimationFrame(zoomFocusFrame);
-      }
       if (panelFocusFrame !== null) {
         window.cancelAnimationFrame(panelFocusFrame);
       }
+      if (surfaceTransitionTimer !== null) {
+        window.clearTimeout(surfaceTransitionTimer);
+      }
+      recenterButton.removeEventListener("click", recenterOnUser);
+      window.removeEventListener("mapsource:recenter", recenterOnUser);
+      recenterButton.remove();
       panelObserver.disconnect();
       map.off("zoomstart", handleZoomStart);
       map.off("zoom", handleZoom);
       map.off("zoomend", handleZoomEnd);
+      map.off("dragstart", handleManualCameraStart);
+      map.off("rotatestart", handleManualCameraStart);
+      map.off("pitchstart", handleManualCameraStart);
       cancelHold();
       if (holdFocusTimer !== null) window.clearTimeout(holdFocusTimer);
       canvasContainer.removeEventListener("pointerdown", beginHold, true);
@@ -1478,6 +1551,41 @@ export function MapCanvas({
 
   useEffect(() => {
     const map = mapRef.current;
+    if (
+      !map ||
+      !ready ||
+      !initialLocation ||
+      initialLocationAppliedRef.current ||
+      userTrackingRef.current ||
+      userCameraInteractedRef.current ||
+      waypointsRef.current.length > 0 ||
+      routeCoordinates(routeRef.current).length > 0
+    ) {
+      return;
+    }
+    initialLocationAppliedRef.current = true;
+    map.easeTo({
+      center: initialLocation.center,
+      zoom: initialLocation.zoom,
+      duration: 720,
+      essential: true,
+    });
+    if (containerRef.current) {
+      containerRef.current.dataset.initialLocation = initialLocation.source;
+      containerRef.current.dataset.initialLocationLabel = initialLocation.label;
+    }
+  }, [initialLocation, ready]);
+
+  useEffect(() => {
+    if (containerRef.current) {
+      containerRef.current.dataset.navigation = navigationActive
+        ? "active"
+        : "inactive";
+    }
+  }, [navigationActive]);
+
+  useEffect(() => {
+    const map = mapRef.current;
     if (!map || loadedSurfaceRef.current === surface) return;
     loadedSurfaceRef.current = surface;
     const center = map.getCenter();
@@ -1487,7 +1595,9 @@ export function MapCanvas({
       bearing: map.getBearing(),
       pitch: map.getPitch(),
     };
-    map.setStyle(`/map/style.json?surface=${surface}`);
+    resumeFollowAfterStyleRef.current = userFollowingRef.current;
+    containerRef.current?.classList.add("is-switching-surface");
+    map.setStyle(`/map/style.json?surface=${surface}`, { diff: true });
   }, [surface]);
 
   useEffect(() => {
@@ -1978,7 +2088,10 @@ export function MapCanvas({
     }
     replayMarker
       .getElement()
-      .classList.toggle("is-active", replaying || replayProgress > 0);
+      .classList.toggle(
+        "is-active",
+        !navigationActive && (replaying || replayProgress > 0),
+      );
     const now = performance.now();
     if (replaying && now - lastCameraUpdate.current > 360) {
       const lookAhead =
@@ -1994,7 +2107,7 @@ export function MapCanvas({
       });
       lastCameraUpdate.current = now;
     }
-  }, [ready, replayProgress, replaying, route, surface]);
+  }, [navigationActive, ready, replayProgress, replaying, route, surface]);
 
   useEffect(
     () => () => {

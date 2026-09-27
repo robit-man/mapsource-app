@@ -25,7 +25,8 @@
     "test": "vitest run --coverage",
     "test:e2e": "playwright test",
     "validate": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run test:e2e",
-    "deploy:check": "node scripts/deployment-check.mjs"
+    "deploy:check": "node scripts/deployment-check.mjs",
+    "deploy:check:interaction": "node scripts/live-navigation-check.mjs"
   },
   "dependencies": {
     "@fastify/rate-limit": "11.2.0",
