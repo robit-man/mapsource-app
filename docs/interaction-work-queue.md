@@ -229,8 +229,10 @@ or search`.
       address is unavailable, falling back to coordinates for unnamed terrain.
 - [ ] Correct compass alignment through the sensor, screen, and map-bearing
       reference frames; never conceal the cause with a fixed angle offset.
-- [x] Physical-device regression: inject GPS fixes during an in-progress pinch
-      and prove zoom continues while follow and marker updates remain active.
+- [ ] Physical-device regression: inject GPS and continuous orientation events
+      during an in-progress pinch and prove zoom continues while follow and
+      marker updates remain active. Release `4f53a14` passed GPS-only emulation
+      but failed the reporting physical handset, so that test was insufficient.
 - [x] During live navigation, one-finger map dragging detaches only the camera,
       keeps GPS/progress/rerouting active, reveals `Recenter`, and restores
       current-location follow from either `Recenter` or the location control.

@@ -25,11 +25,7 @@ import {
   pointAtProgress,
 } from "../route-utils";
 import { LocationSmoother } from "../location-smoothing";
-import {
-  navigationHeading,
-  orientationHeading,
-  smoothHeading,
-} from "../orientation";
+import { navigationHeading, orientationHeading } from "../orientation";
 import type { InitialMapLocation } from "../initial-map-location";
 import type {
   Coordinate,
@@ -602,7 +598,6 @@ export function MapCanvas({
   const userCameraInteractedRef = useRef(false);
   const initialLocationAppliedRef = useRef(false);
   const deviceHeadingRef = useRef<number | null>(null);
-  const deviceHeadingUpdatedAtRef = useRef(0);
   const gpsCourseRef = useRef<number | null>(null);
   const latestUserLocationRef = useRef<Coordinate | null>(null);
   const loadedSurfaceRef = useRef(surface);
@@ -847,7 +842,13 @@ export function MapCanvas({
       positionSpeed?: number | null,
       duration = 180,
     ) => {
-      if (!userFollowingRef.current || replayingRef.current || userZooming)
+      if (
+        !userFollowingRef.current ||
+        replayingRef.current ||
+        userZooming ||
+        preserveMultiTouchFollow ||
+        userAdjustingCamera
+      )
         return;
       const routeBearing = nearestRouteBearing(
         routeCoordinates(routeRef.current),
@@ -930,8 +931,10 @@ export function MapCanvas({
     };
 
     const restoreTrackingLock = () => {
-      if (!userTrackingRef.current) return;
-      setCameraFollowing(true);
+      // Follow never needs to be re-enabled after zoom now that this component
+      // owns the geolocation camera. A queued post-pinch frame must not be able
+      // to undo a later one-finger detach.
+      if (!userTrackingRef.current || !userFollowingRef.current) return;
       refocusTrackedUser();
     };
 
@@ -1045,16 +1048,11 @@ export function MapCanvas({
         window.screen.orientation?.angle ?? legacyOrientation ?? 0;
       const heading = orientationHeading(event, screenAngle);
       if (heading === null) return;
-      const now = performance.now();
-      const smoothed = smoothHeading(
-        deviceHeadingRef.current,
-        heading,
-        deviceHeadingUpdatedAtRef.current
-          ? now - deviceHeadingUpdatedAtRef.current
-          : 1_000,
-      );
-      deviceHeadingRef.current = smoothed;
-      deviceHeadingUpdatedAtRef.current = now;
+      // The map animation already interpolates bearing. Numerically smoothing
+      // only when sensor events arrive can strand the camera tens of degrees
+      // behind the final physical heading when the browser stops emitting after
+      // the handset becomes still. Preserve the actual compass sample here.
+      deviceHeadingRef.current = heading;
       const sensorHeading = Number.isFinite(event.webkitCompassHeading)
         ? event.webkitCompassHeading!
         : event.alpha;
@@ -1070,11 +1068,11 @@ export function MapCanvas({
           : "w3c-alpha";
         button.dataset.compassScreenAngle = String(screenAngle);
         button.dataset.compassTransformedHeading = heading.toFixed(1);
-        button.dataset.heading = smoothed.toFixed(1);
+        button.dataset.heading = heading.toFixed(1);
         button.dataset.orientation = "granted";
       }
       if (containerRef.current) {
-        containerRef.current.dataset.userHeading = smoothed.toFixed(1);
+        containerRef.current.dataset.userHeading = heading.toFixed(1);
         containerRef.current.dataset.compassSensorHeading = Number.isFinite(
           sensorHeading,
         )
@@ -1088,8 +1086,7 @@ export function MapCanvas({
         containerRef.current.dataset.compassScreenAngle = String(screenAngle);
         containerRef.current.dataset.compassTransformedHeading =
           heading.toFixed(1);
-        containerRef.current.dataset.compassSmoothedHeading =
-          smoothed.toFixed(1);
+        containerRef.current.dataset.compassCameraHeading = heading.toFixed(1);
       }
       if (orientationFocusFrame !== null) {
         window.cancelAnimationFrame(orientationFocusFrame);
@@ -1141,24 +1138,45 @@ export function MapCanvas({
       }
     };
     const trackTouchStart = (event: TouchEvent) => {
-      if (event.touches.length >= 2 && userFollowingRef.current) {
+      if (
+        event.target instanceof Node &&
+        canvasContainer.contains(event.target) &&
+        event.touches.length >= 2 &&
+        userFollowingRef.current
+      ) {
         preserveMultiTouchFollow = true;
         preserveZoomFollow = true;
         userCameraInteractedRef.current = true;
+        if (containerRef.current) {
+          containerRef.current.dataset.mapGesture = "multi-touch";
+          containerRef.current.dataset.mapTouchCount = String(
+            event.touches.length,
+          );
+        }
       }
     };
     const trackTouchEnd = (event: TouchEvent) => {
-      if (event.touches.length === 0) finishMultiTouchGesture();
+      if (containerRef.current) {
+        containerRef.current.dataset.mapTouchCount = String(
+          event.touches.length,
+        );
+      }
+      if (event.touches.length < 2) {
+        if (containerRef.current) {
+          containerRef.current.dataset.mapGesture = "idle";
+        }
+        finishMultiTouchGesture();
+      }
     };
-    canvasContainer.addEventListener("touchstart", trackTouchStart, {
+    window.addEventListener("touchstart", trackTouchStart, {
       capture: true,
       passive: true,
     });
-    canvasContainer.addEventListener("touchend", trackTouchEnd, {
+    window.addEventListener("touchend", trackTouchEnd, {
       capture: true,
       passive: true,
     });
-    canvasContainer.addEventListener("touchcancel", trackTouchEnd, {
+    window.addEventListener("touchcancel", trackTouchEnd, {
       capture: true,
       passive: true,
     });
@@ -1752,9 +1770,9 @@ export function MapCanvas({
       cancelHold();
       if (holdFocusTimer !== null) window.clearTimeout(holdFocusTimer);
       canvasContainer.removeEventListener("pointerdown", beginHold, true);
-      canvasContainer.removeEventListener("touchstart", trackTouchStart, true);
-      canvasContainer.removeEventListener("touchend", trackTouchEnd, true);
-      canvasContainer.removeEventListener("touchcancel", trackTouchEnd, true);
+      window.removeEventListener("touchstart", trackTouchStart, true);
+      window.removeEventListener("touchend", trackTouchEnd, true);
+      window.removeEventListener("touchcancel", trackTouchEnd, true);
       mapContainer.removeEventListener(
         "pointerdown",
         captureZoomControlIntent,

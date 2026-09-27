@@ -237,11 +237,14 @@ location` origin actions; destination shows `Select on map or search`.
       frames: use the W3C tilt and screen-orientation transform, reject invalid
       calibration, prefer fresh device heading over the distinct GPS course,
       and avoid fixed-degree correction offsets.
-- [x] APP-092 Reproduce and fix the confirmed physical-device failure where a
+- [ ] APP-092 Reproduce and fix the confirmed physical-device failure where a
       GPS update delivered during a two-finger gesture cancels MapLibre pinch
       zoom. The acceptance test must inject location fixes while both touches
       remain down; +/- zoom, pinch zoom, marker updates, and camera follow must
       remain active together, and only a one-finger pan may reveal `Recenter`.
+      Physical retest of release `4f53a14` still failed: the synthetic GPS-only
+      regression did not reproduce continuous orientation camera updates during
+      the gesture and is not accepted as proof of the handset behavior.
 - [ ] APP-093 Reproduce and fix the confirmed physical-device heading error:
       the rendered scene is roughly 45 degrees counter-clockwise from the real
       device heading. Record raw compass, transformed heading, selected heading

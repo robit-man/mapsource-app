@@ -36,12 +36,13 @@ async function pinchOpen(page, context, duringGesture) {
     type: "touchStart",
     touchPoints: [point(centerX - 24, 0), point(centerX + 24, 1)],
   });
+  await duringGesture?.(0);
   for (let distance = 36; distance <= 104; distance += 12) {
     await session.send("Input.dispatchTouchEvent", {
       type: "touchMove",
       touchPoints: [point(centerX - distance, 0), point(centerX + distance, 1)],
     });
-    if (distance === 60) await duringGesture?.();
+    await duringGesture?.(distance);
     await page.waitForTimeout(28);
   }
   await session.send("Input.dispatchTouchEvent", {
@@ -196,13 +197,23 @@ try {
   await expect(map).not.toHaveClass(/is-switching-surface/);
 
   const beforePinch = cameraZoom(await map.getAttribute("data-camera"));
-  await pinchOpen(page, context, () =>
-    context.setGeolocation({
-      latitude: 45.5362,
-      longitude: -122.71252,
-      accuracy: 8,
-    }),
-  );
+  await pinchOpen(page, context, async (distance) => {
+    await page.evaluate(() => {
+      const orientation = new globalThis.Event("deviceorientationabsolute");
+      Object.defineProperties(orientation, {
+        absolute: { value: true },
+        alpha: { value: 270 },
+      });
+      globalThis.dispatchEvent(orientation);
+    });
+    if (distance === 60) {
+      await context.setGeolocation({
+        latitude: 45.5362,
+        longitude: -122.71252,
+        accuracy: 8,
+      });
+    }
+  });
   await expect
     .poll(async () => cameraZoom(await map.getAttribute("data-camera")))
     .toBeGreaterThan(beforePinch + 1);
