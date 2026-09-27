@@ -239,7 +239,10 @@ or search`.
       Two-finger and zoom gestures must never take this path.
 - [ ] Physical-device regression: scene bearing is currently reported roughly
       45 degrees counter-clockwise from reality. Capture raw/transformed/source/
-      map-bearing telemetry and fix the actual reference-frame selection.
+      map-bearing telemetry and fix the actual reference-frame selection. A
+      retest after `e318a77` still showed roughly 25 degrees: remove camera
+      interpolation lag and convert WebKit magnetic heading to true heading with
+      location/date-derived WMM2025 declination, not a constant offset.
 - [x] Use tilt-compensated absolute orientation, screen rotation compensation,
       circular smoothing, poor-accuracy rejection, GPS course while moving, and
       nearest-route bearing fallback.

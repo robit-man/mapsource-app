@@ -32,6 +32,7 @@
     "@fastify/rate-limit": "11.2.0",
     "@fastify/static": "10.1.5",
     "fastify": "5.12.5",
+    "magvar": "2.2.0",
     "maplibre-gl": "6.11.2",
     "mapsource": "0.1.0",
     "react": "19.1.1",

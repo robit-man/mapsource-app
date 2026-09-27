@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  magneticHeadingToTrue,
   navigationHeading,
   orientationHeading,
   shortestHeadingDelta,
@@ -7,6 +8,11 @@ import {
 } from "./orientation";
 
 describe("orientation conversion", () => {
+  it("converts east-positive magnetic variation to true north", () => {
+    expect(magneticHeadingToTrue(350, 14.5)).toBe(4.5);
+    expect(magneticHeadingToTrue(20, -7)).toBe(13);
+  });
+
   it("converts absolute W3C angles and screen rotation to compass headings", () => {
     expect(
       orientationHeading({

@@ -11,6 +11,15 @@ export function normalizeHeading(value: number) {
   return ((value % 360) + 360) % 360;
 }
 
+/** Convert a magnetic compass heading to the true-north bearing used by maps.
+ * WMM declination is east-positive, so it is added to magnetic heading. */
+export function magneticHeadingToTrue(
+  magneticHeading: number,
+  declination: number,
+) {
+  return normalizeHeading(magneticHeading + declination);
+}
+
 export function shortestHeadingDelta(from: number, to: number) {
   return ((to - from + 540) % 360) - 180;
 }

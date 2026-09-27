@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { magvar } from "magvar";
 import {
   AttributionControl,
   LngLatBounds,
@@ -25,7 +26,11 @@ import {
   pointAtProgress,
 } from "../route-utils";
 import { LocationSmoother } from "../location-smoothing";
-import { navigationHeading, orientationHeading } from "../orientation";
+import {
+  magneticHeadingToTrue,
+  navigationHeading,
+  orientationHeading,
+} from "../orientation";
 import type { InitialMapLocation } from "../initial-map-location";
 import type {
   Coordinate,
@@ -598,6 +603,9 @@ export function MapCanvas({
   const userCameraInteractedRef = useRef(false);
   const initialLocationAppliedRef = useRef(false);
   const deviceHeadingRef = useRef<number | null>(null);
+  const rawDeviceHeadingRef = useRef<number | null>(null);
+  const deviceHeadingMagneticRef = useRef(false);
+  const magneticDeclinationRef = useRef(0);
   const gpsCourseRef = useRef<number | null>(null);
   const latestUserLocationRef = useRef<Coordinate | null>(null);
   const loadedSurfaceRef = useRef(surface);
@@ -1021,7 +1029,10 @@ export function MapCanvas({
       orientationFocusFrame = null;
       const location = latestUserLocationRef.current;
       if (location) {
-        orientToUser(location);
+        // Compass animation must not trail the sensor. GPS/location transitions
+        // retain their own smoothing, while bearing samples land exactly on the
+        // latest true-north target.
+        orientToUser(location, null, null, 0);
         return;
       }
       if (attempt >= 60) return;
@@ -1052,7 +1063,13 @@ export function MapCanvas({
       // only when sensor events arrive can strand the camera tens of degrees
       // behind the final physical heading when the browser stops emitting after
       // the handset becomes still. Preserve the actual compass sample here.
-      deviceHeadingRef.current = heading;
+      const isMagneticHeading = Number.isFinite(event.webkitCompassHeading);
+      const cameraHeading = isMagneticHeading
+        ? magneticHeadingToTrue(heading, magneticDeclinationRef.current)
+        : heading;
+      rawDeviceHeadingRef.current = heading;
+      deviceHeadingMagneticRef.current = isMagneticHeading;
+      deviceHeadingRef.current = cameraHeading;
       const sensorHeading = Number.isFinite(event.webkitCompassHeading)
         ? event.webkitCompassHeading!
         : event.alpha;
@@ -1068,11 +1085,14 @@ export function MapCanvas({
           : "w3c-alpha";
         button.dataset.compassScreenAngle = String(screenAngle);
         button.dataset.compassTransformedHeading = heading.toFixed(1);
-        button.dataset.heading = heading.toFixed(1);
+        button.dataset.compassDeclination =
+          magneticDeclinationRef.current.toFixed(2);
+        button.dataset.compassTrueHeading = cameraHeading.toFixed(1);
+        button.dataset.heading = cameraHeading.toFixed(1);
         button.dataset.orientation = "granted";
       }
       if (containerRef.current) {
-        containerRef.current.dataset.userHeading = heading.toFixed(1);
+        containerRef.current.dataset.userHeading = cameraHeading.toFixed(1);
         containerRef.current.dataset.compassSensorHeading = Number.isFinite(
           sensorHeading,
         )
@@ -1086,7 +1106,10 @@ export function MapCanvas({
         containerRef.current.dataset.compassScreenAngle = String(screenAngle);
         containerRef.current.dataset.compassTransformedHeading =
           heading.toFixed(1);
-        containerRef.current.dataset.compassCameraHeading = heading.toFixed(1);
+        containerRef.current.dataset.compassDeclination =
+          magneticDeclinationRef.current.toFixed(2);
+        containerRef.current.dataset.compassCameraHeading =
+          cameraHeading.toFixed(1);
       }
       if (orientationFocusFrame !== null) {
         window.cancelAnimationFrame(orientationFocusFrame);
@@ -1313,6 +1336,29 @@ export function MapCanvas({
       const receivedAt = performance.now();
       const smoothedFix = locationSmoother.push(rawFix, receivedAt);
       const location: Coordinate = [smoothedFix.lon, smoothedFix.lat];
+      const declination = magvar(
+        smoothedFix.lat,
+        smoothedFix.lon,
+        0,
+        new Date(),
+      );
+      if (Number.isFinite(declination)) {
+        magneticDeclinationRef.current = declination;
+        if (
+          deviceHeadingMagneticRef.current &&
+          rawDeviceHeadingRef.current !== null
+        ) {
+          deviceHeadingRef.current = magneticHeadingToTrue(
+            rawDeviceHeadingRef.current,
+            declination,
+          );
+        }
+        if (containerRef.current) {
+          containerRef.current.dataset.compassDeclination =
+            declination.toFixed(2);
+        }
+        geolocateButton.dataset.compassDeclination = declination.toFixed(2);
+      }
       const previous = latestUserLocationRef.current;
       if (previous) {
         const meanLatitude =

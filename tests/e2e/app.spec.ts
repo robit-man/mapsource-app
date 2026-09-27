@@ -705,11 +705,24 @@ test("requests orientation with location and follows an absolute heading", async
     window.dispatchEvent(accurate);
   });
   await expect(locate).toHaveAttribute("data-orientation", "granted");
-  await expect(locate).toHaveAttribute("data-heading", "100.0");
-  await expect(page.locator(".map-canvas")).toHaveAttribute(
-    "data-camera-bearing-target",
-    "100.0",
+  const declination = Number(
+    await locate.getAttribute("data-compass-declination"),
   );
+  expect(declination).toBeGreaterThan(10);
+  expect(declination).toBeLessThan(20);
+  const trueHeading = (100 + declination) % 360;
+  await expect
+    .poll(async () => Number(await locate.getAttribute("data-heading")))
+    .toBeCloseTo(trueHeading, 1);
+  await expect
+    .poll(async () =>
+      Number(
+        await page
+          .locator(".map-canvas")
+          .getAttribute("data-camera-bearing-actual"),
+      ),
+    )
+    .toBeCloseTo(trueHeading, 0);
   await expect(page.locator(".map-canvas")).toHaveAttribute(
     "data-camera-bearing-source",
     "device",

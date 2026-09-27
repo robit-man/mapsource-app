@@ -250,6 +250,10 @@ location` origin actions; destination shows `Select on map or search`.
       device heading. Record raw compass, transformed heading, selected heading
       source, and final map bearing; correct the reference-frame/source error
       without adding a fixed 45-degree offset, then validate on real hardware.
+      Physical retest after `e318a77` reduced but did not remove the error
+      (roughly 25 degrees counter-clockwise). Account for both camera-animation
+      lag and WebKit magnetic-north headings by applying location/date-derived
+      WMM2025 declination to the map's true-north bearing.
 - [x] APP-094 Make place search region-aware: rank useful matches in and near
       the map's current/derived user region ahead of same-name results from
       distant countries, while retaining a deliberate path to globally search
