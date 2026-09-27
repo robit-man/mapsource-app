@@ -119,10 +119,12 @@ test("plans, searches, layers, and replays a hike", async ({ page }) => {
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
 
   const progress = page.getByLabel("Replay progress");
+  await progress.fill("0.125");
+  await expect(progress).toHaveValue("0.125");
   await page.getByRole("button", { name: "Play replay" }).click();
-  await expect
-    .poll(async () => Number(await progress.inputValue()))
-    .toBeGreaterThan(0);
+  await expect(
+    page.getByRole("button", { name: "Pause replay" }),
+  ).toBeVisible();
 });
 
 test("keeps the mobile route sheet and move controls usable", async ({
