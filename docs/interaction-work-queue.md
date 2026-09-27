@@ -32,22 +32,22 @@ corresponding behavior.
 This is evidence for the checkboxes above, not a substitute for the remaining
 live and device checks.
 
-| Date       | Scope                       | Command or contract                                            | Result                                                                                                             |
-| ---------- | --------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| 2026-09-26 | Full source gate            | `E2E_PORT=3221 npm run validate`                               | Pass: format, lint, TypeScript, 3 unit tests, clean build, 20 browser tests; 4 viewport-inapplicable cases skipped |
-| 2026-09-26 | Dependency audit            | `npm audit --audit-level=high`                                 | Pass: 0 vulnerabilities                                                                                            |
-| 2026-09-26 | Built-server integration    | `DEPLOYMENT_ORIGIN=http://127.0.0.1:3221 npm run deploy:check` | Pass: 5 styles, 4 previews, raster/vector/satellite tiles, and all 7 real route requests                           |
-| 2026-09-26 | Waypoint gesture regression | focused Playwright contract, repeated 3× per viewport          | Pass: 6/6; ordinary pin drag pans without rerouting, hold-drag moves with ≤1 CSS-pixel tracking error              |
-| 2026-09-26 | Supervised/live integration | loopback and `https://app.mapsource.io` deployment checks      | Pass: health, 5 styles, 4 previews, 3 tile classes, all 7 route modes, and satellite after supervised restart      |
-| 2026-09-26 | Live waypoint interaction   | browser gesture against `https://app.mapsource.io`             | Pass: ordinary drag changed only camera; 520 ms hold moved stop at 0 px tracking error; reroute returned 200       |
-| 2026-09-26 | Boot persistence            | systemd unit state and target-link verification                | Pass: base, app, and tunnel enabled; app active with `Restart=always`; multi-user target link resolves correctly   |
-| 2026-09-26 | Live visual inspection      | 1440×900 desktop and Pixel 7 viewports                         | Pass: map, route, controls, action sheet, typography, terrain, attribution, and responsive containment inspected   |
-| 2026-09-26 | Hosted release gate         | GitHub Actions run `36300561921` for `608a782`                 | Pass: clean install, Playwright browser install, full validation, and dependency audit                             |
-| 2026-09-27 | Current full source gate    | `npm run validate`; `npm audit --audit-level=high`             | Pass: formatting, lint, TypeScript, 14 unit tests, clean build, 30 applicable browser tests, and 0 vulnerabilities |
-| 2026-09-27 | Built/supervised/live APIs  | `npm run deploy:check` against ports 3224, 3220, and public    | Pass: five styles, previews, tile classes, transit discovery, five route modes, and satellite                      |
-| 2026-09-27 | Live navigation interaction | `npm run deploy:check:interaction` against the public origin   | Pass: IP focus, live GPS progress, maneuver arrow, style continuity, pinch detach, Recenter, and automatic reroute |
-| 2026-09-27 | Hosted release gate         | GitHub Actions run `36334870014` for `316b11b`                 | Pass: clean install, formatting, lint, TypeScript, unit coverage, production build, 30 browser tests, and audit    |
-| Pending    | Device sensors              | physical iOS/Android heading and calibration exercise          | Not yet run                                                                                                        |
+| Date       | Scope                       | Command or contract                                            | Result                                                                                                                                                                  |
+| ---------- | --------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-09-26 | Full source gate            | `E2E_PORT=3221 npm run validate`                               | Pass: format, lint, TypeScript, 3 unit tests, clean build, 20 browser tests; 4 viewport-inapplicable cases skipped                                                      |
+| 2026-09-26 | Dependency audit            | `npm audit --audit-level=high`                                 | Pass: 0 vulnerabilities                                                                                                                                                 |
+| 2026-09-26 | Built-server integration    | `DEPLOYMENT_ORIGIN=http://127.0.0.1:3221 npm run deploy:check` | Pass: 5 styles, 4 previews, raster/vector/satellite tiles, and all 7 real route requests                                                                                |
+| 2026-09-26 | Waypoint gesture regression | focused Playwright contract, repeated 3× per viewport          | Pass: 6/6; ordinary pin drag pans without rerouting, hold-drag moves with ≤1 CSS-pixel tracking error                                                                   |
+| 2026-09-26 | Supervised/live integration | loopback and `https://app.mapsource.io` deployment checks      | Pass: health, 5 styles, 4 previews, 3 tile classes, all 7 route modes, and satellite after supervised restart                                                           |
+| 2026-09-26 | Live waypoint interaction   | browser gesture against `https://app.mapsource.io`             | Pass: ordinary drag changed only camera; 520 ms hold moved stop at 0 px tracking error; reroute returned 200                                                            |
+| 2026-09-26 | Boot persistence            | systemd unit state and target-link verification                | Pass: base, app, and tunnel enabled; app active with `Restart=always`; multi-user target link resolves correctly                                                        |
+| 2026-09-26 | Live visual inspection      | 1440×900 desktop and Pixel 7 viewports                         | Pass: map, route, controls, action sheet, typography, terrain, attribution, and responsive containment inspected                                                        |
+| 2026-09-26 | Hosted release gate         | GitHub Actions run `36300561921` for `608a782`                 | Pass: clean install, Playwright browser install, full validation, and dependency audit                                                                                  |
+| 2026-09-27 | Current full source gate    | `npm run validate`; `npm audit --audit-level=high`             | Pass: formatting, lint, TypeScript, 14 unit tests, clean build, 30 applicable browser tests, and 0 vulnerabilities                                                      |
+| 2026-09-27 | Built/supervised/live APIs  | `npm run deploy:check` against ports 3224, 3220, and public    | Pass: five styles, previews, tile classes, transit discovery, five route modes, and satellite                                                                           |
+| 2026-09-27 | Live navigation interaction | `npm run deploy:check:interaction` against the public origin   | Pass: IP focus, smoothed GPS marker, maneuver arrow, style continuity, locked pinch zoom through later GPS fixes, one-finger pan detach/Recenter, and automatic reroute |
+| 2026-09-27 | Hosted release gate         | GitHub Actions run `36334870014` for `316b11b`                 | Pass: clean install, formatting, lint, TypeScript, unit coverage, production build, 30 browser tests, and audit                                                         |
+| Pending    | Device sensors              | physical iOS/Android heading and calibration exercise          | Not yet run                                                                                                                                                             |
 
 Focused browser contracts live in `tests/e2e/app.spec.ts`. They cover location
 and heading, the complete planner flow, discovery, attribution geometry, all
@@ -214,10 +214,15 @@ or search`.
 - [x] Keep map zoom user-controlled while location/heading tracking is active;
       preserve the selected zoom across sensor updates and keep the location
       anchored at the visible-region center after zooming.
-- [x] Treat device location and camera following as independent states: allow
-      pinch/drag/rotate while location and navigation remain live, keep the
-      position marker updating off-camera, and show a nearby `Recenter` control
-      beside the location button until follow mode is restored.
+- [x] Keep pinch, rotate, pitch, wheel, and +/- zoom locked to the current
+      location while navigation remains live. Only a one-pointer pan detaches
+      camera follow and reveals the nearby `Recenter` control.
+- [x] Smooth GPS jitter with an accuracy-aware moving average and continuous
+      marker interpolation while preserving prompt real movement and rerouting.
+- [x] Use a selected natural/trail/park feature name plus coordinates when an
+      address is unavailable, falling back to coordinates for unnamed terrain.
+- [x] Correct compass alignment through the sensor, screen, and map-bearing
+      reference frames; never conceal the cause with a fixed angle offset.
 - [x] Use tilt-compensated absolute orientation, screen rotation compensation,
       circular smoothing, poor-accuracy rejection, GPS course while moving, and
       nearest-route bearing fallback.

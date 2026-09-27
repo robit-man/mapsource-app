@@ -110,6 +110,38 @@ summary:focus-visible {
     );
 }
 
+.smoothed-user-location {
+  width: 19px;
+  height: 19px;
+  background: var(--lime);
+  border: 3px solid var(--paper);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 7px rgba(216, 237, 157, 0.16),
+    0 3px 12px rgba(0, 0, 0, 0.42);
+}
+
+.smoothed-user-location::before {
+  position: absolute;
+  inset: -10px;
+  content: "";
+  border: 1px solid rgba(216, 237, 157, 0.5);
+  border-radius: 50%;
+  animation: current-location-pulse 2.2s ease-out infinite;
+}
+
+@keyframes current-location-pulse {
+  from {
+    opacity: 0.72;
+    transform: scale(0.45);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(1.2);
+  }
+}
+
 .map-recenter {
   position: absolute;
   z-index: 8;

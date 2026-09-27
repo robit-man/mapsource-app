@@ -345,6 +345,39 @@ async function pinchMapOpen(page: Page, context: BrowserContext) {
   await page.waitForTimeout(650);
 }
 
+async function panMapByTouch(page: Page, context: BrowserContext) {
+  const canvas = page.locator(".maplibregl-canvas");
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  const startX = box!.x + box!.width * 0.55;
+  const startY = box!.y + Math.min(240, box!.height * 0.34);
+  const session = await context.newCDPSession(page);
+  const point = (x: number, y: number) => ({
+    x,
+    y,
+    radiusX: 1,
+    radiusY: 1,
+    force: 1,
+    id: 0,
+  });
+  await session.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [point(startX, startY)],
+  });
+  for (let offset = 12; offset <= 72; offset += 12) {
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [point(startX + offset, startY + offset * 0.3)],
+    });
+    await page.waitForTimeout(24);
+  }
+  await session.send("Input.dispatchTouchEvent", {
+    type: "touchEnd",
+    touchPoints: [],
+  });
+  await page.waitForTimeout(420);
+}
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     const testWindow = window as Window & { __orientationRequests?: number };
@@ -543,11 +576,11 @@ test("requests orientation with location and follows an absolute heading", async
     );
     await expect(page.locator(".map-canvas")).toHaveAttribute(
       "data-camera-following",
-      "detached",
+      "active",
     );
     await expect(
       page.getByRole("button", { name: "Recenter on current location" }),
-    ).toBeVisible();
+    ).toBeHidden();
 
     const beforePinch = await mapZoom(page);
     await pinchMapOpen(page, context);
@@ -563,6 +596,39 @@ test("requests orientation with location and follows an absolute heading", async
     });
     await page.waitForTimeout(260);
     await expect.poll(() => mapZoom(page)).toBeCloseTo(afterPinch, 1);
+    await context.setGeolocation({
+      latitude: 45.5362,
+      longitude: -122.7125,
+      accuracy: 8,
+    });
+    await page.waitForTimeout(420);
+    await context.setGeolocation({
+      latitude: 45.53624,
+      longitude: -122.71246,
+      accuracy: 10,
+    });
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-user-location-samples",
+      "2",
+    );
+    const rawLocation = await page
+      .locator(".map-canvas")
+      .getAttribute("data-user-location-raw");
+    const smoothedLocation = await page
+      .locator(".map-canvas")
+      .getAttribute("data-user-location-smoothed");
+    expect(smoothedLocation).not.toBe(rawLocation);
+    await expect(page.locator(".smoothed-user-location")).toBeVisible();
+    await expect.poll(() => mapZoom(page)).toBeCloseTo(afterPinch, 1);
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-camera-following",
+      "active",
+    );
+    await panMapByTouch(page, context);
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-camera-following",
+      "detached",
+    );
     await page
       .getByRole("button", { name: "Recenter on current location" })
       .click();
@@ -590,6 +656,7 @@ test("requests orientation with location and follows an absolute heading", async
     await expect(page.locator(".map-canvas")).not.toHaveClass(
       /is-switching-surface/,
     );
+    await expect(page.locator(".smoothed-user-location")).toBeVisible();
   }
   await page.evaluate(() => {
     const inaccurate = new Event("deviceorientationabsolute");
@@ -612,7 +679,16 @@ test("requests orientation with location and follows an absolute heading", async
     window.dispatchEvent(accurate);
   });
   await expect(locate).toHaveAttribute("data-orientation", "granted");
-  await expect(locate).toHaveAttribute("data-heading", "92.4");
+  await expect
+    .poll(async () => Number(await locate.getAttribute("data-heading")))
+    .toBeGreaterThan(90);
+  await expect
+    .poll(async () => Number(await locate.getAttribute("data-heading")))
+    .toBeLessThanOrEqual(100);
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-camera-bearing-source",
+    "device",
+  );
   await page.getByRole("button", { name: "Current location" }).click();
   await expect(page.getByLabel("Stop 1")).toHaveValue("Current location");
   await expect(
@@ -1263,7 +1339,8 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
   isMobile,
 }) => {
   // This is intentionally a full mobile journey: sheet snapping, long-route
-  // overflow, map hold, GPS navigation, pinch detachment, and rerouting. A
+  // overflow, map hold, GPS navigation, locked pinch zoom, pan detach, and
+  // rerouting. A
   // single-worker software-WebGL runner takes longer than the ordinary case.
   test.slow();
   test.skip(!isMobile, "mobile sheet contract");
@@ -1419,11 +1496,12 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
   await expect.poll(() => mapZoom(page)).toBeGreaterThan(beforePinch + 1);
   await expect(page.locator(".map-canvas")).toHaveAttribute(
     "data-camera-following",
-    "detached",
+    "active",
   );
   await expect(
     page.getByRole("button", { name: "Recenter on current location" }),
-  ).toBeVisible();
+  ).toBeHidden();
+  const afterPinch = await mapZoom(page);
 
   await context.setGeolocation({
     latitude: 45.55,
@@ -1439,10 +1517,16 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
   await expect
     .poll(() => routeRequestsByPage.get(page) ?? 0)
     .toBeGreaterThan(requestsBeforeNavigation);
+  await expect.poll(() => mapZoom(page)).toBeCloseTo(afterPinch, 1);
   const reroute = routeBodiesByPage.get(page)?.at(-1) as
     | { waypoints?: Array<{ lat?: number; lon?: number }> }
     | undefined;
   expect(reroute?.waypoints?.[0]?.lat).toBeCloseTo(45.5502, 4);
+  await panMapByTouch(page, context);
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-camera-following",
+    "detached",
+  );
   expect(reroute?.waypoints?.[0]?.lon).toBeCloseTo(-122.6802, 4);
   await expect(page.locator(".map-canvas")).toHaveAttribute(
     "data-camera-following",

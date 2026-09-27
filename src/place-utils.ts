@@ -47,3 +47,14 @@ export function placeAddress(place: DiscoveryPlace | null) {
 export function coordinateLabel(coordinate: { lat: number; lon: number }) {
   return `${coordinate.lat.toFixed(5)}, ${coordinate.lon.toFixed(5)}`;
 }
+
+export function waypointLabelForPlace(
+  place: DiscoveryPlace | null,
+  coordinate: { lat: number; lon: number },
+) {
+  const name = meaningfulPlaceName(place);
+  const address = placeAddress(place);
+  const coordinates = coordinateLabel(coordinate);
+  if (address) return name ?? address;
+  return name ? `${name} · ${coordinates}` : coordinates;
+}

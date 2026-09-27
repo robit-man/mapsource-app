@@ -25,6 +25,12 @@ import {
   nearestRouteBearing,
   pointAtProgress,
 } from "../route-utils";
+import { LocationSmoother } from "../location-smoothing";
+import {
+  navigationHeading,
+  orientationHeading,
+  smoothHeading,
+} from "../orientation";
 import type { InitialMapLocation } from "../initial-map-location";
 import type {
   Coordinate,
@@ -447,47 +453,6 @@ type CompassOrientationEvent = DeviceOrientationEvent & {
   webkitCompassAccuracy?: number;
 };
 
-function normalizeHeading(value: number) {
-  return ((value % 360) + 360) % 360;
-}
-
-function smoothHeading(previous: number | null, next: number, weight = 0.24) {
-  if (previous === null) return normalizeHeading(next);
-  const delta = ((next - previous + 540) % 360) - 180;
-  return normalizeHeading(previous + delta * weight);
-}
-
-function orientationHeading(event: CompassOrientationEvent): number | null {
-  if (Number.isFinite(event.webkitCompassHeading)) {
-    return normalizeHeading(event.webkitCompassHeading!);
-  }
-  if (
-    !Number.isFinite(event.alpha) ||
-    (!event.absolute && event.type !== "deviceorientationabsolute")
-  ) {
-    return null;
-  }
-  const alpha = (event.alpha! * Math.PI) / 180;
-  const beta = ((event.beta ?? 0) * Math.PI) / 180;
-  const gamma = ((event.gamma ?? 0) * Math.PI) / 180;
-  const rA =
-    -Math.cos(alpha) * Math.sin(gamma) -
-    Math.sin(alpha) * Math.sin(beta) * Math.cos(gamma);
-  const rB =
-    -Math.sin(alpha) * Math.sin(gamma) +
-    Math.cos(alpha) * Math.sin(beta) * Math.cos(gamma);
-  let heading =
-    Math.abs(rA) + Math.abs(rB) < 1e-7
-      ? 360 - event.alpha!
-      : (Math.atan2(rA, rB) * 180) / Math.PI;
-  const legacyOrientation = (window as Window & { orientation?: number })
-    .orientation;
-  const screenAngle =
-    window.screen.orientation?.angle ?? legacyOrientation ?? 0;
-  heading += screenAngle;
-  return normalizeHeading(heading);
-}
-
 const businessIconPaths: Record<string, string> = {
   cafe: "M6 8h10v5a4 4 0 0 1-4 4h-2a4 4 0 0 1-4-4V8Zm10 2h1a2 2 0 0 1 0 4h-1M9 4v2m4-2v2",
   restaurant: "M7 4v7m-3-7v4a3 3 0 0 0 6 0V4m-3 7v9m9-16v16m0-16c3 2 3 6 0 9",
@@ -652,6 +617,7 @@ export function MapCanvas({
   const userCameraInteractedRef = useRef(false);
   const initialLocationAppliedRef = useRef(false);
   const deviceHeadingRef = useRef<number | null>(null);
+  const deviceHeadingUpdatedAtRef = useRef(0);
   const gpsCourseRef = useRef<number | null>(null);
   const latestUserLocationRef = useRef<Coordinate | null>(null);
   const loadedSurfaceRef = useRef(surface);
@@ -705,8 +671,9 @@ export function MapCanvas({
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
+    const mapContainer = containerRef.current;
     const map = new MapLibreMap({
-      container: containerRef.current,
+      container: mapContainer,
       style: `/map/style.json?surface=${surfaceRef.current}`,
       center: [-122.716, 45.531],
       zoom: 13.4,
@@ -732,19 +699,86 @@ export function MapCanvas({
     );
     const geolocate = new GeolocateControl({
       positionOptions: { enableHighAccuracy: true },
-      fitBoundsOptions: { maxZoom: 16 },
+      fitBoundsOptions: { maxZoom: 16, duration: 620 },
       trackUserLocation: true,
+      showUserLocation: false,
+      showAccuracyCircle: false,
     });
     map.addControl(geolocate, "bottom-right");
+    const locationSmoother = new LocationSmoother();
+    const userLocationElement = document.createElement("div");
+    userLocationElement.className = "smoothed-user-location";
+    userLocationElement.ariaHidden = "true";
+    const userLocationMarker = new MapLibreMarker({
+      element: userLocationElement,
+      anchor: "center",
+    });
+    let userLocationMarkerAdded = false;
+    let renderedUserLocation: Coordinate | null = null;
+    let userLocationAnimationFrame: number | null = null;
+    let lastLocationReceivedAt: number | null = null;
+    const moveUserLocationMarker = (
+      target: Coordinate,
+      receivedAt: number,
+      reset: boolean,
+    ) => {
+      if (userLocationAnimationFrame !== null) {
+        window.cancelAnimationFrame(userLocationAnimationFrame);
+        userLocationAnimationFrame = null;
+      }
+      if (!userLocationMarkerAdded) {
+        userLocationMarker.setLngLat(target).addTo(map);
+        userLocationMarkerAdded = true;
+        renderedUserLocation = target;
+        lastLocationReceivedAt = receivedAt;
+        return;
+      }
+      const start = renderedUserLocation ?? target;
+      const elapsed = lastLocationReceivedAt
+        ? receivedAt - lastLocationReceivedAt
+        : 700;
+      const duration = reset
+        ? 0
+        : Math.max(280, Math.min(1_200, elapsed * 0.9));
+      lastLocationReceivedAt = receivedAt;
+      if (duration === 0) {
+        renderedUserLocation = target;
+        userLocationMarker.setLngLat(target);
+        return;
+      }
+      const startedAt = performance.now();
+      let longitudeDelta = target[0] - start[0];
+      if (longitudeDelta > 180) longitudeDelta -= 360;
+      if (longitudeDelta < -180) longitudeDelta += 360;
+      const animate = (now: number) => {
+        const progress = Math.min(1, (now - startedAt) / duration);
+        const eased = progress * progress * (3 - 2 * progress);
+        renderedUserLocation = [
+          start[0] + longitudeDelta * eased,
+          start[1] + (target[1] - start[1]) * eased,
+        ];
+        userLocationMarker.setLngLat(renderedUserLocation);
+        if (progress < 1) {
+          userLocationAnimationFrame = window.requestAnimationFrame(animate);
+        } else {
+          userLocationAnimationFrame = null;
+        }
+      };
+      userLocationAnimationFrame = window.requestAnimationFrame(animate);
+    };
     const recenterButton = document.createElement("button");
     recenterButton.type = "button";
     recenterButton.className = "map-recenter";
     recenterButton.textContent = "Recenter";
     recenterButton.ariaLabel = "Recenter on current location";
-    containerRef.current.append(recenterButton);
+    mapContainer.append(recenterButton);
     let attributionAdded = false;
     let userFocusSequence = 0;
     let userZooming = false;
+    let userAdjustingCamera = false;
+    let preserveMultiTouchFollow = false;
+    let preserveZoomFollow = false;
+    let followedUserZoom: number | null = null;
     let hasInitialUserFocus = false;
     let panelFocusFrame: number | null = null;
     let surfaceTransitionTimer: number | null = null;
@@ -802,6 +836,7 @@ export function MapCanvas({
       location: Coordinate,
       positionHeading?: number | null,
       positionSpeed?: number | null,
+      duration = 180,
     ) => {
       if (!userFollowingRef.current || replayingRef.current || userZooming)
         return;
@@ -809,15 +844,19 @@ export function MapCanvas({
         routeCoordinates(routeRef.current),
         location,
       );
-      const heading =
-        (Number.isFinite(positionHeading) && (positionSpeed ?? 0) >= 0.8
-          ? normalizeHeading(positionHeading!)
-          : null) ??
-        deviceHeadingRef.current ??
-        gpsCourseRef.current ??
-        routeBearing ??
-        map.getBearing();
+      const resolvedHeading = navigationHeading({
+        deviceHeading: deviceHeadingRef.current,
+        deviceUpdatedAt: deviceHeadingUpdatedAtRef.current,
+        now: performance.now(),
+        positionHeading,
+        positionSpeed,
+        gpsCourse: gpsCourseRef.current,
+        routeBearing,
+        mapBearing: map.getBearing(),
+      });
+      const heading = resolvedHeading.heading;
       const target = visibleMapFocusTarget(map);
+      followedUserZoom ??= map.getZoom();
       hasInitialUserFocus = true;
       updateGeolocateCameraContract(true);
       const focusSequence = ++userFocusSequence;
@@ -864,21 +903,37 @@ export function MapCanvas({
         {
           center: location,
           offset: target.offset,
+          zoom: followedUserZoom,
           bearing: heading,
           pitch: routeRef.current ? 54 : 42,
-          duration: 180,
+          duration,
           essential: true,
         },
         { geolocateSource: true },
       );
       if (containerRef.current) {
         containerRef.current.dataset.cameraBearing = heading.toFixed(1);
+        containerRef.current.dataset.cameraBearingSource =
+          resolvedHeading.source;
       }
     };
 
     const refocusTrackedUser = () => {
       const location = latestUserLocationRef.current;
       if (location) orientToUser(location);
+    };
+
+    const restoreTrackingLock = () => {
+      if (!userTrackingRef.current) return;
+      const button = containerRef.current?.querySelector<HTMLElement>(
+        ".maplibregl-ctrl-geolocate",
+      );
+      if (button?.classList.contains("maplibregl-ctrl-geolocate-background")) {
+        geolocate.trigger();
+        return;
+      }
+      setCameraFollowing(true);
+      refocusTrackedUser();
     };
 
     const recenterOnUser = () => {
@@ -894,7 +949,6 @@ export function MapCanvas({
       userCameraInteractedRef.current = true;
       userZooming = true;
       userFocusSequence += 1;
-      if (userTrackingRef.current) setCameraFollowing(false);
     };
     const handleZoom = () => {
       if (!userZooming) return;
@@ -903,22 +957,52 @@ export function MapCanvas({
     const handleZoomEnd = () => {
       if (!userZooming) return;
       userZooming = false;
+      followedUserZoom = map.getZoom();
       updateGeolocateCameraContract(true);
       if (containerRef.current) {
         containerRef.current.dataset.userZoom = map.getZoom().toFixed(2);
       }
+      if (preserveZoomFollow) {
+        preserveZoomFollow = false;
+        window.requestAnimationFrame(restoreTrackingLock);
+      } else if (userFollowingRef.current) {
+        window.requestAnimationFrame(refocusTrackedUser);
+      }
     };
-    const handleManualCameraStart = (event: { originalEvent?: unknown }) => {
+    const handlePanStart = (event: { originalEvent?: unknown }) => {
       if (!event.originalEvent) return;
+      if (
+        preserveMultiTouchFollow ||
+        (event.originalEvent instanceof TouchEvent &&
+          event.originalEvent.touches.length !== 1)
+      ) {
+        return;
+      }
       userCameraInteractedRef.current = true;
       if (userTrackingRef.current) setCameraFollowing(false);
+    };
+    const handleCameraAdjustmentStart = (event: {
+      originalEvent?: unknown;
+    }) => {
+      if (!event.originalEvent) return;
+      userCameraInteractedRef.current = true;
+      userAdjustingCamera = true;
+    };
+    const handleCameraAdjustmentEnd = () => {
+      if (!userAdjustingCamera) return;
+      userAdjustingCamera = false;
+      if (userFollowingRef.current) {
+        window.requestAnimationFrame(refocusTrackedUser);
+      }
     };
     map.on("zoomstart", handleZoomStart);
     map.on("zoom", handleZoom);
     map.on("zoomend", handleZoomEnd);
-    map.on("dragstart", handleManualCameraStart);
-    map.on("rotatestart", handleManualCameraStart);
-    map.on("pitchstart", handleManualCameraStart);
+    map.on("dragstart", handlePanStart);
+    map.on("rotatestart", handleCameraAdjustmentStart);
+    map.on("pitchstart", handleCameraAdjustmentStart);
+    map.on("rotateend", handleCameraAdjustmentEnd);
+    map.on("pitchend", handleCameraAdjustmentEnd);
 
     const panel = document.querySelector<HTMLElement>(".route-panel");
     const panelObserver = new ResizeObserver(() => {
@@ -955,20 +1039,29 @@ export function MapCanvas({
       );
       if (Number.isFinite(accuracy)) {
         if (button) button.dataset.compassAccuracy = accuracy!.toFixed(0);
-        if (accuracy! > 45) {
+        if (accuracy! < 0 || accuracy! > 45) {
           if (button) button.dataset.orientation = "calibrate";
           return;
         }
       }
-      const heading = orientationHeading(event);
+      const legacyOrientation = (window as Window & { orientation?: number })
+        .orientation;
+      const screenAngle =
+        window.screen.orientation?.angle ?? legacyOrientation ?? 0;
+      const heading = orientationHeading(event, screenAngle);
       if (heading === null) return;
+      const now = performance.now();
       const smoothed = smoothHeading(
         deviceHeadingRef.current,
         heading,
-        deviceHeadingRef.current === null ? 1 : 0.24,
+        deviceHeadingUpdatedAtRef.current
+          ? now - deviceHeadingUpdatedAtRef.current
+          : 1_000,
       );
       deviceHeadingRef.current = smoothed;
+      deviceHeadingUpdatedAtRef.current = now;
       if (button) {
+        button.dataset.rawHeading = heading.toFixed(1);
         button.dataset.heading = smoothed.toFixed(1);
         button.dataset.orientation = "granted";
       }
@@ -1026,6 +1119,59 @@ export function MapCanvas({
     window.requestAnimationFrame(attachOrientationRequest);
 
     const canvasContainer = map.getCanvasContainer();
+    const finishMultiTouchGesture = () => {
+      if (!preserveMultiTouchFollow) return;
+      preserveMultiTouchFollow = false;
+      if (!userZooming && !userAdjustingCamera) {
+        preserveZoomFollow = false;
+        window.requestAnimationFrame(restoreTrackingLock);
+      }
+    };
+    const trackTouchStart = (event: TouchEvent) => {
+      if (event.touches.length >= 2 && userFollowingRef.current) {
+        preserveMultiTouchFollow = true;
+        preserveZoomFollow = true;
+        userCameraInteractedRef.current = true;
+      }
+    };
+    const trackTouchEnd = (event: TouchEvent) => {
+      if (event.touches.length === 0) finishMultiTouchGesture();
+    };
+    canvasContainer.addEventListener("touchstart", trackTouchStart, {
+      capture: true,
+      passive: true,
+    });
+    canvasContainer.addEventListener("touchend", trackTouchEnd, {
+      capture: true,
+      passive: true,
+    });
+    canvasContainer.addEventListener("touchcancel", trackTouchEnd, {
+      capture: true,
+      passive: true,
+    });
+    const captureZoomControlIntent = (event: PointerEvent) => {
+      if (
+        userFollowingRef.current &&
+        event.target instanceof Element &&
+        event.target.closest(
+          ".maplibregl-ctrl-zoom-in, .maplibregl-ctrl-zoom-out",
+        )
+      ) {
+        preserveZoomFollow = true;
+      }
+    };
+    const captureWheelZoomIntent = () => {
+      if (userFollowingRef.current) preserveZoomFollow = true;
+    };
+    mapContainer.addEventListener(
+      "pointerdown",
+      captureZoomControlIntent,
+      true,
+    );
+    canvasContainer.addEventListener("wheel", captureWheelZoomIntent, {
+      capture: true,
+      passive: true,
+    });
     let holdTimer: number | null = null;
     let holdFocusTimer: number | null = null;
     let holdStart: { pointerId: number; x: number; y: number } | null = null;
@@ -1147,7 +1293,7 @@ export function MapCanvas({
       if (location) orientToUser(location);
     });
     geolocate.on("trackuserlocationend", () => {
-      setCameraFollowing(false);
+      setCameraFollowing(preserveMultiTouchFollow || preserveZoomFollow);
       if (containerRef.current) {
         containerRef.current.dataset.userTracking = userTrackingRef.current
           ? "active"
@@ -1155,10 +1301,16 @@ export function MapCanvas({
       }
     });
     geolocate.on("geolocate", (event) => {
-      const location: Coordinate = [
-        event.coords.longitude,
-        event.coords.latitude,
-      ];
+      const rawFix: UserLocationFix = {
+        lat: event.coords.latitude,
+        lon: event.coords.longitude,
+        accuracy: Number.isFinite(event.coords.accuracy)
+          ? event.coords.accuracy
+          : null,
+      };
+      const receivedAt = performance.now();
+      const smoothedFix = locationSmoother.push(rawFix, receivedAt);
+      const location: Coordinate = [smoothedFix.lon, smoothedFix.lat];
       const previous = latestUserLocationRef.current;
       if (previous) {
         const meanLatitude =
@@ -1175,19 +1327,36 @@ export function MapCanvas({
       onUserTrackingChangeRef.current(true);
       if (containerRef.current) {
         containerRef.current.dataset.userTracking = "active";
+        containerRef.current.dataset.userLocationRaw = [
+          rawFix.lon.toFixed(6),
+          rawFix.lat.toFixed(6),
+        ].join(",");
+        containerRef.current.dataset.userLocationSmoothed = [
+          smoothedFix.lon.toFixed(6),
+          smoothedFix.lat.toFixed(6),
+        ].join(",");
+        containerRef.current.dataset.userLocationSamples = String(
+          smoothedFix.sampleCount,
+        );
       }
-      onUserLocationRef.current({
-        lat: location[1],
-        lon: location[0],
-        accuracy: Number.isFinite(event.coords.accuracy)
-          ? event.coords.accuracy
-          : null,
-      });
+      const fixInterval = lastLocationReceivedAt
+        ? receivedAt - lastLocationReceivedAt
+        : 700;
+      moveUserLocationMarker(location, receivedAt, smoothedFix.reset);
+      onUserLocationRef.current(smoothedFix);
       const positionHeading = event.coords.heading;
       const positionSpeed = event.coords.speed;
+      const cameraDuration = smoothedFix.reset
+        ? 220
+        : Math.max(280, Math.min(1_000, fixInterval * 0.9));
       window.requestAnimationFrame(() => {
         window.requestAnimationFrame(() => {
-          orientToUser(location, positionHeading, positionSpeed);
+          orientToUser(
+            location,
+            positionHeading,
+            positionSpeed,
+            cameraDuration,
+          );
         });
       });
     });
@@ -1535,15 +1704,35 @@ export function MapCanvas({
       map.off("zoomstart", handleZoomStart);
       map.off("zoom", handleZoom);
       map.off("zoomend", handleZoomEnd);
-      map.off("dragstart", handleManualCameraStart);
-      map.off("rotatestart", handleManualCameraStart);
-      map.off("pitchstart", handleManualCameraStart);
+      map.off("dragstart", handlePanStart);
+      map.off("rotatestart", handleCameraAdjustmentStart);
+      map.off("pitchstart", handleCameraAdjustmentStart);
+      map.off("rotateend", handleCameraAdjustmentEnd);
+      map.off("pitchend", handleCameraAdjustmentEnd);
       cancelHold();
       if (holdFocusTimer !== null) window.clearTimeout(holdFocusTimer);
       canvasContainer.removeEventListener("pointerdown", beginHold, true);
+      canvasContainer.removeEventListener("touchstart", trackTouchStart, true);
+      canvasContainer.removeEventListener("touchend", trackTouchEnd, true);
+      canvasContainer.removeEventListener("touchcancel", trackTouchEnd, true);
+      mapContainer.removeEventListener(
+        "pointerdown",
+        captureZoomControlIntent,
+        true,
+      );
+      canvasContainer.removeEventListener(
+        "wheel",
+        captureWheelZoomIntent,
+        true,
+      );
       window.removeEventListener("pointermove", trackHold, true);
       window.removeEventListener("pointerup", endHold, true);
       window.removeEventListener("pointercancel", endHold, true);
+      if (userLocationAnimationFrame !== null) {
+        window.cancelAnimationFrame(userLocationAnimationFrame);
+      }
+      userLocationMarker.remove();
+      locationSmoother.clear();
       map.remove();
       mapRef.current = null;
     };

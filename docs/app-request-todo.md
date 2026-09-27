@@ -200,10 +200,12 @@ location` origin actions; destination shows `Select on map or search`.
 - [x] APP-078 With the sheet half open, center tracked location at the center of
       the visible upper half (about one-quarter viewport height / three-quarters up
       from the bottom), not behind the sheet.
-- [x] APP-079 Let pinch, drag, rotate, and wheel/buttons change
-      the camera while device location and route navigation remain enabled.
-- [x] APP-080 Manual camera interaction detaches follow but keeps
-      live position updates and the user marker on the route/map.
+- [x] APP-079 Let pinch, rotate, and wheel/buttons adjust the camera while
+      device-location follow remains locked; zoom must stay anchored on the
+      current location and subsequent GPS fixes must preserve the chosen zoom.
+- [x] APP-080 Only a one-pointer map pan detaches camera follow. Keep live
+      position updates and the user marker active, and do not show `Recenter`
+      for pinch, rotate, pitch, wheel, or +/- zoom.
 - [x] APP-081 Show a compact `Recenter` tooltip beside the
       location control while detached and restore camera follow when pressed.
 
@@ -225,6 +227,16 @@ location` origin actions; destination shows `Select on map or search`.
 - [x] APP-088 Preserve route visibility and live-navigation state
       across every map-surface change without requiring a mode toggle or another
       location-button press.
+- [x] APP-089 Smooth active GPS fixes with an accuracy-aware moving window and
+      continuously interpolate the visible current-location marker, camera,
+      route progress, and heading without delaying genuine large movements.
+- [x] APP-090 Prefer the selected map feature's name for natural areas, trails,
+      parks, and other named features; show coordinates after that name, and use
+      coordinates alone when neither an address nor a meaningful name exists.
+- [x] APP-091 Correct compass/map alignment from the actual sensor reference
+      frames: use the W3C tilt and screen-orientation transform, reject invalid
+      calibration, prefer fresh device heading over the distinct GPS course,
+      and avoid fixed-degree correction offsets.
 
 ## Release evidence required before closing in-progress work
 

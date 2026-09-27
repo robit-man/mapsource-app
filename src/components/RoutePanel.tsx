@@ -795,7 +795,10 @@ export function RoutePanel({
                       coordinates;
                   const subtitle = isBuilding
                     ? coordinates
-                    : address || categories;
+                    : address ||
+                      [categories, name ? coordinates : null]
+                        .filter(Boolean)
+                        .join(" · ");
                   return (
                     <>
                       <strong>{title}</strong>

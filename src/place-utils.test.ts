@@ -4,6 +4,7 @@ import {
   meaningfulPlaceCategories,
   meaningfulPlaceName,
   placeAddress,
+  waypointLabelForPlace,
 } from "./place-utils";
 import type { DiscoveryPlace } from "./types";
 
@@ -36,5 +37,28 @@ describe("place display formatting", () => {
       "3229 Northwest Pittock Drive, Portland Oregon 97210",
     );
     expect(coordinateLabel(place.coordinate!)).toBe("45.52520, -122.71620");
+  });
+
+  it("keeps natural feature names with coordinates and falls back to coordinates", () => {
+    const coordinate = { lat: 45.53123, lon: -122.71234 };
+    const naturalPlace: DiscoveryPlace = {
+      ...place,
+      name: "Wildwood Trail",
+      categories: ["path", "natural"],
+      coordinate,
+      address: {
+        housenumber: null,
+        street: null,
+        city: null,
+        postcode: null,
+        country: null,
+      },
+    };
+    expect(waypointLabelForPlace(naturalPlace, coordinate)).toBe(
+      "Wildwood Trail · 45.53123, -122.71234",
+    );
+    expect(waypointLabelForPlace(null, coordinate)).toBe(
+      "45.53123, -122.71234",
+    );
   });
 });

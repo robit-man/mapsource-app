@@ -8,9 +8,11 @@ import {
   type InitialMapLocation,
 } from "./initial-map-location";
 import {
+  coordinateLabel,
   meaningfulPlaceCategories,
   meaningfulPlaceName,
   placeAddress,
+  waypointLabelForPlace,
 } from "./place-utils";
 import {
   haversineMeters,
@@ -173,10 +175,13 @@ export default function App() {
     const name = meaningfulPlaceName(inspection.place);
     const title =
       name || address || inspection.fallbackLabel || "Selected map point";
-    const detail =
-      name && address
-        ? address
-        : meaningfulPlaceCategories(inspection.place).join(" · ") || undefined;
+    const categories = meaningfulPlaceCategories(inspection.place).join(" · ");
+    const coordinates = coordinateLabel(inspection.coordinate);
+    const detail = name
+      ? [address || categories, !address ? coordinates : null]
+          .filter(Boolean)
+          .join(" · ")
+      : address || categories || coordinates;
     return { title, detail };
   }, [inspection]);
 
@@ -509,13 +514,13 @@ export default function App() {
         const next = [...current];
         next.splice(Math.max(1, current.length - 1), 0, {
           id: newId(),
-          label: inspection?.place?.name ?? "Selected map point",
+          label: waypointLabelForPlace(inspection?.place ?? null, coordinate),
           ...coordinate,
         });
         return next;
       });
     },
-    [inspection?.place?.name],
+    [inspection?.place],
   );
 
   const navigateToPoint = useCallback(
@@ -531,10 +536,7 @@ export default function App() {
       }
       const destination: Waypoint = {
         id: newId(),
-        label:
-          meaningfulPlaceName(inspection?.place ?? null) ??
-          placeAddress(inspection?.place ?? null) ??
-          "Selected destination",
+        label: waypointLabelForPlace(inspection?.place ?? null, coordinate),
         routeRole: "destination",
         ...coordinate,
       };

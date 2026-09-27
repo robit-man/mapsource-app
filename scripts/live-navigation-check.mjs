@@ -50,6 +50,38 @@ async function pinchOpen(page, context) {
   await page.waitForTimeout(650);
 }
 
+async function panByTouch(page, context) {
+  const box = await page.locator(".maplibregl-canvas").boundingBox();
+  if (!box) throw new Error("Map canvas has no rendered bounds");
+  const startX = box.x + box.width * 0.56;
+  const startY = box.y + Math.min(240, box.height * 0.34);
+  const session = await context.newCDPSession(page);
+  const point = (x, y) => ({
+    x,
+    y,
+    radiusX: 1,
+    radiusY: 1,
+    force: 1,
+    id: 0,
+  });
+  await session.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [point(startX, startY)],
+  });
+  for (let offset = 12; offset <= 72; offset += 12) {
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [point(startX + offset, startY + offset * 0.3)],
+    });
+    await page.waitForTimeout(24);
+  }
+  await session.send("Input.dispatchTouchEvent", {
+    type: "touchEnd",
+    touchPoints: [],
+  });
+  await page.waitForTimeout(420);
+}
+
 const browser = await chromium.launch({
   headless: true,
   ...(executablePath ? { executablePath } : {}),
@@ -167,10 +199,28 @@ try {
   await expect
     .poll(async () => cameraZoom(await map.getAttribute("data-camera")))
     .toBeGreaterThan(beforePinch + 1);
-  await expect(map).toHaveAttribute("data-camera-following", "detached");
+  const afterPinch = cameraZoom(await map.getAttribute("data-camera"));
+  await expect(map).toHaveAttribute("data-camera-following", "active");
   const recenter = page.getByRole("button", {
     name: "Recenter on current location",
   });
+  await expect(recenter).toBeHidden();
+  await context.setGeolocation({
+    latitude: progressPoint[1] + 0.00002,
+    longitude: progressPoint[0] + 0.00002,
+    accuracy: 8,
+  });
+  await expect
+    .poll(async () => cameraZoom(await map.getAttribute("data-camera")))
+    .toBeCloseTo(afterPinch, 1);
+  await expect(map).toHaveAttribute(
+    "data-user-location-smoothed",
+    /^-?\d+\.\d{6},-?\d+\.\d{6}$/,
+  );
+  await expect(page.locator(".smoothed-user-location")).toBeVisible();
+
+  await panByTouch(page, context);
+  await expect(map).toHaveAttribute("data-camera-following", "detached");
   await expect(recenter).toBeVisible();
 
   const requestsBeforeDeviation = routeRequests;
