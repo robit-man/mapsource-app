@@ -331,6 +331,7 @@ async function pinchMapOpen(
   expect(box).not.toBeNull();
   const centerX = box!.x + box!.width / 2;
   const centerY = box!.y + Math.min(220, box!.height * 0.32);
+  const startingZoom = await mapZoom(page);
   const session = await context.newCDPSession(page);
   const point = (x: number, id: number) => ({
     x,
@@ -340,24 +341,35 @@ async function pinchMapOpen(
     force: 1,
     id,
   });
-  await session.send("Input.dispatchTouchEvent", {
-    type: "touchStart",
-    touchPoints: [point(centerX - 24, 0), point(centerX + 24, 1)],
-  });
-  await duringGesture?.(0);
-  for (let distance = 36; distance <= 104; distance += 12) {
+  // A saturated software-WebGL CI runner can occasionally drop an entire CDP
+  // touch stream before MapLibre sees its first move. Retry the same real
+  // two-pointer gesture once; a product regression still fails both attempts.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     await session.send("Input.dispatchTouchEvent", {
-      type: "touchMove",
-      touchPoints: [point(centerX - distance, 0), point(centerX + distance, 1)],
+      type: "touchStart",
+      touchPoints: [point(centerX - 24, 0), point(centerX + 24, 1)],
     });
-    await duringGesture?.(distance);
-    await page.waitForTimeout(28);
+    await duringGesture?.(0);
+    for (let distance = 36; distance <= 104; distance += 12) {
+      await session.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [
+          point(centerX - distance, 0),
+          point(centerX + distance, 1),
+        ],
+      });
+      await duringGesture?.(distance);
+      await page.waitForTimeout(28);
+    }
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+    await page.waitForTimeout(650);
+    if ((await mapZoom(page)) > startingZoom + 1) break;
+    await page.waitForTimeout(120);
   }
-  await session.send("Input.dispatchTouchEvent", {
-    type: "touchEnd",
-    touchPoints: [],
-  });
-  await page.waitForTimeout(650);
+  await session.detach();
 }
 
 async function panMapByTouch(page: Page, context: BrowserContext) {
