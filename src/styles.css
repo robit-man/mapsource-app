@@ -538,6 +538,42 @@ summary:focus-visible {
   opacity: 0.42;
 }
 
+.empty-stop-row {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  min-height: 48px;
+}
+
+.empty-stop-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.empty-stop-actions button {
+  min-width: 0;
+  min-height: 38px;
+  flex: 1 1 auto;
+  padding: 7px 10px;
+  color: var(--moss-light);
+  background: rgba(216, 237, 157, 0.025);
+  border: 1px dashed rgba(216, 237, 157, 0.3);
+  border-radius: 999px;
+  font-size: 9px;
+  line-height: 1.15;
+  cursor: pointer;
+}
+
+.empty-stop-actions button:hover,
+.empty-stop-actions button:focus-visible {
+  color: var(--paper);
+  background: rgba(216, 237, 157, 0.08);
+  border-color: rgba(216, 237, 157, 0.58);
+  outline: none;
+}
+
 .stop-row {
   position: relative;
   display: grid;
@@ -1394,6 +1430,44 @@ summary:focus-visible {
   width: 136px;
   height: 94px;
   pointer-events: none;
+}
+
+.intermediate-point__label {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  display: flex;
+  width: max-content;
+  max-width: min(230px, 70vw);
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  color: var(--paper);
+  text-align: center;
+  background: rgba(16, 19, 16, 0.9);
+  border: 1px solid rgba(216, 237, 157, 0.22);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.34);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  transform: translateX(-50%);
+}
+
+.intermediate-point__label strong,
+.intermediate-point__label small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.intermediate-point__label strong {
+  font-size: 10px;
+  font-weight: 680;
+}
+
+.intermediate-point__label small {
+  color: #a7afa3;
+  font-size: 8px;
 }
 
 .intermediate-point button {

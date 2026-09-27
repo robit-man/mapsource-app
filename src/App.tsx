@@ -53,29 +53,26 @@ const LAYER_OPTIONS: Array<{
   },
 ];
 
-const INITIAL_WAYPOINTS: Waypoint[] = [
-  {
-    id: "lower-macleay",
-    label: "Lower Macleay Trailhead",
-    lat: 45.53616,
-    lon: -122.71256,
-  },
-  {
-    id: "pittock",
-    label: "Pittock Mansion overlook",
-    lat: 45.52521,
-    lon: -122.71627,
-  },
-];
-
 function newId() {
   return typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
     : `stop-${Date.now()}`;
 }
 
+function placeEndpoint(
+  current: Waypoint[],
+  role: "origin" | "destination",
+  point: Waypoint,
+) {
+  const withoutRole = current.filter((waypoint) => waypoint.routeRole !== role);
+  const endpoint = { ...point, routeRole: role };
+  return role === "origin"
+    ? [endpoint, ...withoutRole]
+    : [...withoutRole, endpoint];
+}
+
 export default function App() {
-  const [waypoints, setWaypoints] = useState(INITIAL_WAYPOINTS);
+  const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [mode, setMode] = useState<RouteMode>("hike");
   const [route, setRoute] = useState<RouteResponse | null>(null);
   const [routeState, setRouteState] = useState<
@@ -103,7 +100,40 @@ export default function App() {
   const [replaying, setReplaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState(1);
   const animationRef = useRef<number | null>(null);
-
+  const pendingEndpointRef = useRef<"origin" | "destination" | null>(null);
+  const pendingCurrentLocationRef = useRef(false);
+  const userLocationRef = useRef<{ lat: number; lon: number } | null>(null);
+  const heldPointDetails = useMemo(() => {
+    if (!inspection) return null;
+    if (inspection.status === "loading") {
+      return { title: "Finding location…" };
+    }
+    const street = inspection.place
+      ? [inspection.place.address.housenumber, inspection.place.address.street]
+          .filter(Boolean)
+          .join(" ")
+      : "";
+    const locality = inspection.place
+      ? [
+          inspection.place.address.city,
+          inspection.place.address.state,
+          inspection.place.address.postcode,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      : "";
+    const address = [street, locality].filter(Boolean).join(", ");
+    const title =
+      inspection.place?.name ||
+      address ||
+      inspection.fallbackLabel ||
+      "Selected map point";
+    const detail =
+      inspection.place?.name && address
+        ? address
+        : inspection.place?.categories.join(" · ") || undefined;
+    return { title, detail };
+  }, [inspection]);
   useEffect(() => {
     const preventGesture = (event: Event) => event.preventDefault();
     const preventWheelZoom = (event: WheelEvent) => {
@@ -177,6 +207,16 @@ export default function App() {
   );
 
   useEffect(() => {
+    if (waypoints.length < 2) {
+      const resetTimer = window.setTimeout(() => {
+        setRoute(null);
+        setRouteState("idle");
+        setRouteError(null);
+        setReplayProgress(0);
+        setReplaying(false);
+      }, 0);
+      return () => window.clearTimeout(resetTimer);
+    }
     const controller = new AbortController();
     const loadingTimer = window.setTimeout(() => {
       if (controller.signal.aborted) return;
@@ -276,6 +316,22 @@ export default function App() {
   const pickWaypoint = useCallback(
     (coordinate: { lat: number; lon: number }) => {
       if (!selectedWaypointId) return;
+      if (selectedWaypointId.startsWith("pending-")) {
+        const role = selectedWaypointId.endsWith("destination")
+          ? "destination"
+          : "origin";
+        setWaypoints((current) =>
+          placeEndpoint(current, role, {
+            id: newId(),
+            label:
+              role === "origin" ? "Selected start" : "Selected destination",
+            ...coordinate,
+          }),
+        );
+        pendingEndpointRef.current = null;
+        setSelectedWaypointId(null);
+        return;
+      }
       moveWaypoint(selectedWaypointId, coordinate);
       setSelectedWaypointId(null);
     },
@@ -286,6 +342,11 @@ export default function App() {
     const lat = result.coordinate?.lat;
     const lon = result.coordinate?.lon;
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    const pendingEndpoint = pendingEndpointRef.current;
+    if (pendingEndpoint) {
+      pendingEndpointRef.current = null;
+      setSelectedWaypointId(null);
+    }
     setWaypoints((current) => {
       const point: Waypoint = {
         id: result.id ?? newId(),
@@ -293,6 +354,17 @@ export default function App() {
         lat: lat!,
         lon: lon!,
       };
+      if (pendingEndpoint) {
+        return placeEndpoint(current, pendingEndpoint, point);
+      }
+      if (current.length === 0) {
+        return [{ ...point, routeRole: "destination" }];
+      }
+      if (current.length === 1) {
+        const role =
+          current[0]?.routeRole === "destination" ? "origin" : "destination";
+        return placeEndpoint(current, role, point);
+      }
       if (current.length >= 10) return [...current.slice(0, -1), point];
       return [...current.slice(0, -1), point, current[current.length - 1]!];
     });
@@ -420,12 +492,25 @@ export default function App() {
       <MapCanvas
         activeDiscovery={discoveryCategory}
         discoveryPlaces={discoveryPlaces}
+        heldPointDetails={heldPointDetails}
         onBoundsChange={setViewBounds}
         onCenterChange={setCenter}
         onAddIntermediate={addIntermediatePoint}
         onInspectPoint={inspectPoint}
         onMapPick={pickWaypoint}
         onNavigatePoint={navigateToPoint}
+        onUserLocation={(coordinate) => {
+          userLocationRef.current = coordinate;
+          if (!pendingCurrentLocationRef.current) return;
+          pendingCurrentLocationRef.current = false;
+          setWaypoints((current) =>
+            placeEndpoint(current, "origin", {
+              id: newId(),
+              label: "Current location",
+              ...coordinate,
+            }),
+          );
+        }}
         onWaypointMove={moveWaypoint}
         replayProgress={replayProgress}
         replaying={replaying}
@@ -517,6 +602,32 @@ export default function App() {
             return next;
           });
           return id;
+        }}
+        onSelectEmptyStop={(role) => {
+          pendingEndpointRef.current = role;
+          setSelectedWaypointId(`pending-${role}`);
+          window.requestAnimationFrame(() => {
+            document
+              .querySelector<HTMLButtonElement>(".search-toggle")
+              ?.click();
+          });
+        }}
+        onUseCurrentLocation={() => {
+          const coordinate = userLocationRef.current;
+          if (coordinate) {
+            setWaypoints((current) =>
+              placeEndpoint(current, "origin", {
+                id: newId(),
+                label: "Current location",
+                ...coordinate,
+              }),
+            );
+            return;
+          }
+          pendingCurrentLocationRef.current = true;
+          document
+            .querySelector<HTMLButtonElement>(".maplibregl-ctrl-geolocate")
+            ?.click();
         }}
         onModeChange={setMode}
         onMoveSelect={setSelectedWaypointId}

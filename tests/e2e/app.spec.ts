@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+const routeRequestsByPage = new WeakMap<Page, number>();
+
 const routeResponse = {
   schema: "mapsource-route.v1",
   profile: "pedestrian",
@@ -36,26 +38,46 @@ const routeResponse = {
 };
 
 async function stubApplicationApis(page: Page) {
+  routeRequestsByPage.set(page, 0);
   await page.route("**/api/route", async (route) => {
+    routeRequestsByPage.set(page, (routeRequestsByPage.get(page) ?? 0) + 1);
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify(routeResponse),
     });
   });
   await page.route("**/api/search?**", async (route) => {
-    await route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        schema: "mapsource-lookup.v1",
-        results: [
-          {
+    const query = new URL(route.request().url()).searchParams
+      .get("q")
+      ?.toLowerCase();
+    const result = query?.includes("pittock")
+      ? {
+          id: "pittock",
+          kind: "landmark",
+          name: "Pittock Mansion overlook",
+          displayName: "Pittock Mansion, Portland, Oregon",
+          coordinate: { lat: 45.52521, lon: -122.71627 },
+        }
+      : query?.includes("lower macleay")
+        ? {
+            id: "lower-macleay",
+            kind: "landmark",
+            name: "Lower Macleay Trailhead",
+            displayName: "Lower Macleay Trailhead, Portland, Oregon",
+            coordinate: { lat: 45.53616, lon: -122.71256 },
+          }
+        : {
             id: "forest-park",
             kind: "landmark",
             name: "Forest Park",
             displayName: "Forest Park, Portland, Oregon",
             coordinate: { lat: 45.5723, lon: -122.741 },
-          },
-        ],
+          };
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        schema: "mapsource-lookup.v1",
+        results: [result],
       }),
     });
   });
@@ -210,6 +232,7 @@ async function stubApplicationApis(page: Page) {
             id: "buildings.extrusion",
             type: "fill-extrusion",
             source: "test-buildings",
+            minzoom: 15,
             paint: {
               "fill-extrusion-color": "#263027",
               "fill-extrusion-height": ["get", "render_height"],
@@ -232,6 +255,47 @@ async function stubApplicationApis(page: Page) {
   await page.route("**/map/tiles/raster/**", async (route) => {
     await route.fulfill({ status: 204 });
   });
+}
+
+async function selectEmptyStop(
+  page: Page,
+  role: "origin" | "destination",
+  query: string,
+  resultName: string,
+) {
+  await page
+    .locator(`.empty-stop-row[data-route-role="${role}"]`)
+    .getByRole("button", { name: "Select on map or search" })
+    .click();
+  const search = page.getByLabel("Search trailheads, parks, and addresses");
+  await search.fill(query);
+  const result = page.getByRole("option").filter({ hasText: resultName });
+  await expect(result).toBeVisible();
+  await result.click();
+}
+
+async function seedRoute(page: Page) {
+  await selectEmptyStop(
+    page,
+    "destination",
+    "Pittock Mansion",
+    "Pittock Mansion overlook",
+  );
+  await selectEmptyStop(
+    page,
+    "origin",
+    "Lower Macleay",
+    "Lower Macleay Trailhead",
+  );
+  await expect(page.getByLabel("Stop 1")).toHaveValue(
+    "Lower Macleay Trailhead",
+  );
+  await expect(page.getByLabel("Stop 2")).toHaveValue(
+    "Pittock Mansion overlook",
+  );
+  await expect(
+    page.locator(".stat-primary").getByText("3.14 km"),
+  ).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -260,9 +324,14 @@ test.beforeEach(async ({ page }) => {
   await expect(
     await page.request.get("/assets/maplibre-gl-shared.mjs"),
   ).toBeOK();
-  await expect(page.getByRole("heading", { name: "Hike plan" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Hike" })).toBeVisible();
+  await expect(page.locator(".stop-row")).toHaveCount(0);
+  await expect(page.getByText("Plan", { exact: true })).toBeVisible();
   await expect(
-    page.locator(".stat-primary").getByText("3.14 km"),
+    page.getByRole("button", { name: "Select on map or search" }),
+  ).toHaveCount(2);
+  await expect(
+    page.getByRole("button", { name: "Current location" }),
   ).toBeVisible();
   await expect(page.locator(".brand-mark")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Open search" })).toBeVisible();
@@ -271,6 +340,15 @@ test.beforeEach(async ({ page }) => {
     /maplibregl-compact-show/,
   );
   await expect(page.locator(".maplibregl-ctrl-attrib")).toBeVisible();
+});
+
+test("starts without a placeholder route or automatic route request", async ({
+  page,
+}) => {
+  await page.waitForTimeout(350);
+  expect(routeRequestsByPage.get(page)).toBe(0);
+  await expect(page.locator(".map-stop")).toHaveCount(0);
+  await expect(page.locator(".stop-row")).toHaveCount(0);
 });
 
 test("requests orientation with location and follows an absolute heading", async ({
@@ -332,12 +410,19 @@ test("requests orientation with location and follows an absolute heading", async
   });
   await expect(locate).toHaveAttribute("data-orientation", "granted");
   await expect(locate).toHaveAttribute("data-heading", "92.4");
+  await page.getByRole("button", { name: "Current location" }).click();
+  await expect(page.getByLabel("Stop 1")).toHaveValue("Current location");
+  await expect(
+    page.getByRole("button", { name: "Select on map or search" }),
+  ).toHaveCount(1);
+  expect(routeRequestsByPage.get(page)).toBe(0);
 });
 
 test("plans, searches, layers, and replays a hike", async ({
   page,
   isMobile,
 }) => {
+  await seedRoute(page);
   await page.getByRole("button", { name: "Map layers" }).click();
   await expect(page.getByRole("button", { name: /Elevation/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /Dark/ })).toBeVisible();
@@ -454,6 +539,7 @@ test("switches every planner family and inserts or reorders route stops", async 
   isMobile,
 }) => {
   test.skip(Boolean(isMobile), "desktop reordering contract");
+  await seedRoute(page);
   const modeSwitchBox = await page.locator(".mode-switch").boundingBox();
   expect(modeSwitchBox).not.toBeNull();
   for (const label of [
@@ -475,17 +561,15 @@ test("switches every planner family and inserts or reorders route stops", async 
     );
   }
   await page.getByRole("button", { name: "Car" }).click();
-  await expect(page.getByRole("heading", { name: "Drive plan" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Car" })).toBeVisible();
   await expect(page.getByText("Road overview")).toBeVisible();
 
   await page.getByRole("button", { name: "Transit" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Transit plan" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Transit" })).toBeVisible();
   await expect(page.getByText("Transit network route")).toBeVisible();
 
   await page.getByRole("button", { name: "Train" }).click();
-  await expect(page.getByRole("heading", { name: "Train plan" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Train" })).toBeVisible();
   await expect(page.getByText("Rail connection preview")).toBeVisible();
 
   await page.getByRole("button", { name: /Add stop between/ }).click();
@@ -550,6 +634,7 @@ test("keeps every travel mode directly selectable on mobile", async ({
   isMobile,
 }) => {
   test.skip(!isMobile, "mobile mode-picker contract");
+  await seedRoute(page);
   await expect(page.locator(".map-canvas")).toHaveAttribute(
     "data-route-padding",
     /.+/,
@@ -563,9 +648,9 @@ test("keeps every travel mode directly selectable on mobile", async ({
     (page.viewportSize()?.height ?? 800) * 0.45,
   );
   for (const [label, heading] of [
-    ["Car", "Drive plan"],
-    ["Transit", "Transit plan"],
-    ["Train", "Train plan"],
+    ["Car", "Car"],
+    ["Transit", "Transit"],
+    ["Train", "Train"],
   ] as const) {
     const button = page.getByRole("button", { name: label });
     await expect(button).toBeVisible();
@@ -596,6 +681,7 @@ test("locks browser zoom without disabling map interaction", async ({
     }),
   ).toBe(true);
   if (isMobile) {
+    await seedRoute(page);
     await page.getByRole("button", { name: "Expand route planner" }).click();
     await page.getByRole("button", { name: /Add stop between/ }).click();
     await expect(page.getByLabel("Stop 2")).toHaveCSS("font-size", "16px");
@@ -606,6 +692,7 @@ test("locks browser zoom without disabling map interaction", async ({
 test("keeps the camera under a directly placed map waypoint", async ({
   page,
 }) => {
+  await seedRoute(page);
   await page
     .getByRole("button", { name: /Move Lower Macleay Trailhead on map/ })
     .click();
@@ -652,6 +739,7 @@ test("keeps the camera under a directly placed map waypoint", async ({
 test("pans from a waypoint drag and moves it only after a long press", async ({
   page,
 }) => {
+  await seedRoute(page);
   const marker = page.locator(".map-stop").first();
   const map = page.locator(".map-canvas");
   const stop = page.getByLabel("Stop 1");
@@ -725,6 +813,7 @@ test("pans from a waypoint drag and moves it only after a long press", async ({
 test("opens map-hold actions and routes inspected places through the sheet", async ({
   page,
 }) => {
+  await seedRoute(page);
   const canvas = page.locator(".maplibregl-canvas");
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
@@ -809,6 +898,9 @@ test("opens map-hold actions and routes inspected places through the sheet", asy
   const details = page.getByLabel("Selected place details");
   await expect(details.getByText("Trail House Cafe")).toBeVisible();
   await expect(details.getByText("12 Forest Road Portland")).toBeVisible();
+  const pointLabel = page.locator(".intermediate-point__label");
+  await expect(pointLabel.getByText("Trail House Cafe")).toBeVisible();
+  await expect(pointLabel.getByText("12 Forest Road, Portland")).toBeVisible();
   await expect(
     details.getByRole("link", { name: "Call selected place" }),
   ).toBeVisible();
@@ -828,6 +920,7 @@ test("keeps the mobile route sheet and move controls usable", async ({
   isMobile,
 }) => {
   test.skip(!isMobile, "mobile interaction contract");
+  await seedRoute(page);
   const handle = page.getByRole("button", { name: "Expand route planner" });
   const handleBox = await handle.boundingBox();
   expect(handleBox).not.toBeNull();
@@ -855,6 +948,7 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
   isMobile,
 }) => {
   test.skip(!isMobile, "mobile sheet contract");
+  await seedRoute(page);
   const panel = page.getByRole("complementary", { name: "Route planner" });
   await expect(panel).toHaveAttribute("data-sheet-mode", "half");
   for (let index = 1; index <= 4; index += 1) {

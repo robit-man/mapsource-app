@@ -5,6 +5,7 @@ export type Waypoint = {
   label: string;
   lat: number;
   lon: number;
+  routeRole?: "origin" | "destination";
 };
 
 export type SearchResult = {
@@ -25,9 +26,12 @@ export type DiscoveryPlace = {
   address: {
     housenumber: string | null;
     street: string | null;
+    district?: string | null;
     city: string | null;
+    state?: string | null;
     postcode: string | null;
     country: string | null;
+    countryCode?: string | null;
   };
   distanceMeters: number | null;
   properties: Record<string, string>;

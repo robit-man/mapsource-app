@@ -39,6 +39,7 @@ setWorkerUrl("/assets/maplibre-gl-worker.mjs");
 type MapCanvasProps = {
   waypoints: Waypoint[];
   route: RouteResponse | null;
+  heldPointDetails: { title: string; detail?: string } | null;
   selectedWaypointId: string | null;
   onWaypointMove: (
     id: string,
@@ -55,6 +56,7 @@ type MapCanvasProps = {
     coordinate: { lat: number; lon: number },
     userLocation: { lat: number; lon: number } | null,
   ) => void;
+  onUserLocation: (coordinate: { lat: number; lon: number }) => void;
   onCenterChange: (coordinate: { lat: number; lon: number }) => void;
   surface: MapSurface;
   replayProgress: number;
@@ -190,6 +192,7 @@ function highlightedBuildingAt(
 ): BuildingSelection | null {
   const buildingLayers = (map.getStyle().layers ?? []).filter(
     (layer) =>
+      !layer.id.startsWith("selected-building-") &&
       (layer.type === "fill-extrusion" || layer.type === "fill") &&
       (layer.id.toLowerCase().includes("building") ||
         ("source-layer" in layer && layer["source-layer"] === "building")),
@@ -197,41 +200,49 @@ function highlightedBuildingAt(
   const extrusionLayers = buildingLayers.filter(
     (layer) => layer.type === "fill-extrusion",
   );
-  const layerIds = (
-    extrusionLayers.length > 0 ? extrusionLayers : buildingLayers
-  ).map((layer) => layer.id);
-  if (layerIds.length === 0) return null;
-
-  const candidates = map
-    .queryRenderedFeatures([point.x, point.y], { layers: layerIds })
-    .flatMap((feature, hitIndex) => {
-      const polygons =
-        feature.geometry.type === "Polygon"
-          ? [feature.geometry.coordinates]
-          : feature.geometry.type === "MultiPolygon"
-            ? feature.geometry.coordinates
-            : [];
-      return polygons.map((rings) => {
-        const projected = projectedPolygon(map, rings);
-        const contains = pointInPolygon([point.x, point.y], projected);
-        return {
-          feature,
-          hitIndex,
-          rings,
-          contains,
-          distance: contains ? 0 : ringDistance(point, projected[0] ?? []),
-          area: ringArea(projected[0] ?? []),
-        };
-      });
-    })
-    .filter((candidate) => candidate.area > 0)
-    .sort(
-      (left, right) =>
-        Number(right.contains) - Number(left.contains) ||
-        left.distance - right.distance ||
-        left.area - right.area ||
-        left.hitIndex - right.hitIndex,
-    );
+  const fillLayers = buildingLayers.filter((layer) => layer.type === "fill");
+  const candidatesFor = (layerIds: string[]) =>
+    layerIds.length === 0
+      ? []
+      : map
+          .queryRenderedFeatures([point.x, point.y], { layers: layerIds })
+          .flatMap((feature, hitIndex) => {
+            const polygons =
+              feature.geometry.type === "Polygon"
+                ? [feature.geometry.coordinates]
+                : feature.geometry.type === "MultiPolygon"
+                  ? feature.geometry.coordinates
+                  : [];
+            return polygons.map((rings) => {
+              const projected = projectedPolygon(map, rings);
+              const contains = pointInPolygon([point.x, point.y], projected);
+              return {
+                feature,
+                hitIndex,
+                rings,
+                contains,
+                distance: contains
+                  ? 0
+                  : ringDistance(point, projected[0] ?? []),
+                area: ringArea(projected[0] ?? []),
+              };
+            });
+          })
+          .filter((candidate) => candidate.area > 0)
+          .sort(
+            (left, right) =>
+              Number(right.contains) - Number(left.contains) ||
+              left.distance - right.distance ||
+              left.area - right.area ||
+              left.hitIndex - right.hitIndex,
+          );
+  const extrusionCandidates = candidatesFor(
+    extrusionLayers.map((layer) => layer.id),
+  );
+  const candidates =
+    extrusionCandidates.length > 0
+      ? extrusionCandidates
+      : candidatesFor(fillLayers.map((layer) => layer.id));
   const match = candidates[0];
   if (!match) return null;
 
@@ -544,12 +555,14 @@ function placePopup(place: DiscoveryPlace, category: string) {
 export function MapCanvas({
   waypoints,
   route,
+  heldPointDetails,
   selectedWaypointId,
   onWaypointMove,
   onMapPick,
   onAddIntermediate,
   onInspectPoint,
   onNavigatePoint,
+  onUserLocation,
   onCenterChange,
   surface,
   replayProgress,
@@ -571,6 +584,7 @@ export function MapCanvas({
   const onAddIntermediateRef = useRef(onAddIntermediate);
   const onInspectPointRef = useRef(onInspectPoint);
   const onNavigatePointRef = useRef(onNavigatePoint);
+  const onUserLocationRef = useRef(onUserLocation);
   const onCenterChangeRef = useRef(onCenterChange);
   const onBoundsChangeRef = useRef(onBoundsChange);
   const surfaceRef = useRef(surface);
@@ -598,6 +612,7 @@ export function MapCanvas({
     onAddIntermediateRef.current = onAddIntermediate;
     onInspectPointRef.current = onInspectPoint;
     onNavigatePointRef.current = onNavigatePoint;
+    onUserLocationRef.current = onUserLocation;
     onCenterChangeRef.current = onCenterChange;
     onBoundsChangeRef.current = onBoundsChange;
     surfaceRef.current = surface;
@@ -611,6 +626,7 @@ export function MapCanvas({
     onInspectPoint,
     onMapPick,
     onNavigatePoint,
+    onUserLocation,
     replaying,
     route,
     selectedWaypointId,
@@ -922,6 +938,7 @@ export function MapCanvas({
         }
       }
       latestUserLocationRef.current = location;
+      onUserLocationRef.current({ lat: location[1], lon: location[0] });
       orientToUser(location, event.coords.heading, event.coords.speed);
     });
 
@@ -1198,6 +1215,21 @@ export function MapCanvas({
     element.className = "intermediate-point";
     element.addEventListener("pointerdown", (event) => event.stopPropagation());
 
+    if (heldPointDetails) {
+      const label = document.createElement("div");
+      label.className = "intermediate-point__label";
+      label.ariaLive = "polite";
+      const title = document.createElement("strong");
+      title.textContent = heldPointDetails.title;
+      label.append(title);
+      if (heldPointDetails.detail) {
+        const detail = document.createElement("small");
+        detail.textContent = heldPointDetails.detail;
+        label.append(detail);
+      }
+      element.append(label);
+    }
+
     const origin = document.createElement("button");
     origin.type = "button";
     origin.className = "intermediate-point__origin";
@@ -1272,7 +1304,7 @@ export function MapCanvas({
       intermediateMarkerRef.current?.remove();
       intermediateMarkerRef.current = null;
     };
-  }, [heldPoint, ready]);
+  }, [heldPoint, heldPointDetails, ready]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1391,11 +1423,13 @@ export function MapCanvas({
       element.title = "Hold, then drag to move this stop";
       const label = document.createElement("span");
       label.textContent =
-        index === 0
-          ? "A"
-          : index === waypoints.length - 1
-            ? "B"
-            : String(index + 1);
+        waypoints.length === 1 && waypoint.routeRole === "destination"
+          ? "B"
+          : index === 0
+            ? "A"
+            : index === waypoints.length - 1
+              ? "B"
+              : String(index + 1);
       element.append(label);
       element.addEventListener("click", (event) => event.stopPropagation());
       const marker = new MapLibreMarker({

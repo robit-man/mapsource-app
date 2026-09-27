@@ -28,6 +28,8 @@ type RoutePanelProps = {
   onModeChange: (mode: RouteMode) => void;
   waypoints: Waypoint[];
   onInsert: (afterIndex: number) => string | null;
+  onSelectEmptyStop: (role: "origin" | "destination") => void;
+  onUseCurrentLocation: () => void;
   onResolve: (id: string, result: SearchResult) => void;
   onReorder: (fromId: string, toId: string) => void;
   onRemove: (id: string) => void;
@@ -60,49 +62,49 @@ const MODES: Array<{
     id: "hike",
     label: "Hike",
     icon: "walk",
-    title: "Hike plan",
+    title: "Hike",
     kicker: "Trail route",
   },
   {
     id: "walk",
     label: "Walk",
     icon: "walk",
-    title: "Walk plan",
+    title: "Walk",
     kicker: "Pedestrian route",
   },
   {
     id: "run",
     label: "Run",
     icon: "run",
-    title: "Run plan",
+    title: "Run",
     kicker: "Running route",
   },
   {
     id: "bike",
     label: "Bike",
     icon: "bike",
-    title: "Ride plan",
+    title: "Bike",
     kicker: "Bicycle route",
   },
   {
     id: "car",
     label: "Car",
     icon: "car",
-    title: "Drive plan",
+    title: "Car",
     kicker: "Road route",
   },
   {
     id: "transit",
     label: "Transit",
     icon: "bus",
-    title: "Transit plan",
+    title: "Transit",
     kicker: "Public transport",
   },
   {
     id: "train",
     label: "Train",
     icon: "train",
-    title: "Train plan",
+    title: "Train",
     kicker: "Rail connection",
   },
 ];
@@ -124,7 +126,12 @@ type SheetDrag = {
 
 type SheetMode = "minimized" | "half" | "expanded";
 
-function stopLabel(index: number, length: number) {
+function stopLabel(
+  index: number,
+  length: number,
+  routeRole?: Waypoint["routeRole"],
+) {
+  if (length === 1 && routeRole === "destination") return "B";
   if (index === 0) return "A";
   if (index === length - 1) return "B";
   return String(index);
@@ -163,6 +170,8 @@ export function RoutePanel({
   onModeChange,
   waypoints,
   onInsert,
+  onSelectEmptyStop,
+  onUseCurrentLocation,
   onResolve,
   onReorder,
   onRemove,
@@ -513,7 +522,9 @@ export function RoutePanel({
             ? "Routing"
             : routeState === "error"
               ? "Retry"
-              : "Live"}
+              : routeState === "ready"
+                ? "Live"
+                : "Plan"}
         </div>
       </header>
 
@@ -774,10 +785,28 @@ export function RoutePanel({
             <small>drag anywhere · tap pin to place</small>
           </div>
           <div className="stop-list">
+            {(waypoints.length === 0 ||
+              (waypoints.length === 1 &&
+                waypoints[0]?.routeRole === "destination")) && (
+              <div className="empty-stop-row" data-route-role="origin">
+                <span className="stop-index">A</span>
+                <div className="empty-stop-actions">
+                  <button
+                    onClick={() => onSelectEmptyStop("origin")}
+                    type="button"
+                  >
+                    Select on map or search
+                  </button>
+                  <button onClick={onUseCurrentLocation} type="button">
+                    Current location
+                  </button>
+                </div>
+              </div>
+            )}
             {waypoints.map((waypoint, index) => (
               <Fragment key={waypoint.id}>
                 <div
-                  aria-label={`Route stop ${stopLabel(index, waypoints.length)}: ${waypoint.label}`}
+                  aria-label={`Route stop ${stopLabel(index, waypoints.length, waypoint.routeRole)}: ${waypoint.label}`}
                   className={`stop-row ${selectedWaypointId === waypoint.id ? "is-moving" : ""} ${stopDrag?.id === waypoint.id ? "is-dragging" : ""}`}
                   data-stop-id={waypoint.id}
                   onPointerDown={(event) => startStopDrag(event, waypoint)}
@@ -786,7 +815,7 @@ export function RoutePanel({
                   }}
                 >
                   <span className={`stop-index stop-index--${index}`}>
-                    {stopLabel(index, waypoints.length)}
+                    {stopLabel(index, waypoints.length, waypoint.routeRole)}
                   </span>
                   <Icon name="grip" size={15} />
                   <input
@@ -920,6 +949,21 @@ export function RoutePanel({
                 )}
               </Fragment>
             ))}
+            {(waypoints.length === 0 ||
+              (waypoints.length === 1 &&
+                waypoints[0]?.routeRole !== "destination")) && (
+              <div className="empty-stop-row" data-route-role="destination">
+                <span className="stop-index">B</span>
+                <div className="empty-stop-actions">
+                  <button
+                    onClick={() => onSelectEmptyStop("destination")}
+                    type="button"
+                  >
+                    Select on map or search
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           {selectedWaypointId && (
             <p className="move-hint">
@@ -1101,7 +1145,11 @@ export function RoutePanel({
             }}
           >
             <span className="stop-index">
-              {stopLabel(activeStopIndex, waypoints.length)}
+              {stopLabel(
+                activeStopIndex,
+                waypoints.length,
+                activeStop?.routeRole,
+              )}
             </span>
             <Icon name="grip" size={15} />
             <strong>{activeStop.label}</strong>

@@ -104,8 +104,8 @@ real-backend contract for styles, tiles, previews, and route modes.
 
 ## Stops and waypoint manipulation
 
-- [ ] Start with an empty planner instead of a preloaded Pittock Mansion route.
-- [ ] In the empty planner, show dashed origin actions for `Select on map or
+- [x] Start with an empty planner instead of a preloaded Pittock Mansion route.
+- [x] In the empty planner, show dashed origin actions for `Select on map or
 search` and `Current location`; destination exposes only `Select on map
 or search`.
 - [ ] Replace the far-right move-pin action in populated stop pills with an
@@ -138,6 +138,8 @@ or search`.
       lower-half action cluster: add intermediate stop, inspect, and navigate.
 - [x] Inspect loads reverse-geocoded place/business data from Mapsource and
       presents details plus route actions inside the action sheet.
+- [x] Show the resolved place name and full mapped address in a compact label
+      above the long-press waypoint.
 - [x] Navigate uses current device location as origin when starting a new route;
       when a destination already exists it asks before replacing it.
 - [ ] Tapping ordinary map space outside a held-point marker/action cluster
@@ -150,6 +152,8 @@ or search`.
 - [x] Select only the smallest exact building footprint, render the highlight
       on its 3D extrusion, and resolve details from its address/centroid rather
       than reverse-geocoding the visually displaced facade pixel.
+- [x] Keep travel-mode headers concise (`Hike`, `Bike`, `Car`, and so on)
+      without redundant `plan` wording.
 - [ ] After the held point is anchored, focus it in the center of the visible
       upper map when the sheet is half open; with a minimized sheet, place it
       only slightly above the full viewport center.
