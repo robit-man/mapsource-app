@@ -3,6 +3,11 @@ import { MapCanvas } from "./components/MapCanvas";
 import { RoutePanel } from "./components/RoutePanel";
 import { SearchBar } from "./components/SearchBar";
 import { Icon } from "./components/Icon";
+import {
+  meaningfulPlaceCategories,
+  meaningfulPlaceName,
+  placeAddress,
+} from "./place-utils";
 import type {
   ApiError,
   DiscoveryPlace,
@@ -43,13 +48,13 @@ const LAYER_OPTIONS: Array<{
     id: "dark",
     label: "Dark",
     detail: "Mapsource night map",
-    preview: "/map/preview/dark.png",
+    preview: "/map/tiles/raster/dark/13/1303/2929.png",
   },
   {
     id: "light",
     label: "Light",
     detail: "Mapsource daylight map",
-    preview: "/map/preview/light.png",
+    preview: "/map/tiles/raster/light/13/1303/2929.png",
   },
 ];
 
@@ -108,30 +113,14 @@ export default function App() {
     if (inspection.status === "loading") {
       return { title: "Finding location…" };
     }
-    const street = inspection.place
-      ? [inspection.place.address.housenumber, inspection.place.address.street]
-          .filter(Boolean)
-          .join(" ")
-      : "";
-    const locality = inspection.place
-      ? [
-          inspection.place.address.city,
-          inspection.place.address.state,
-          inspection.place.address.postcode,
-        ]
-          .filter(Boolean)
-          .join(" ")
-      : "";
-    const address = [street, locality].filter(Boolean).join(", ");
+    const address = placeAddress(inspection.place);
+    const name = meaningfulPlaceName(inspection.place);
     const title =
-      inspection.place?.name ||
-      address ||
-      inspection.fallbackLabel ||
-      "Selected map point";
+      name || address || inspection.fallbackLabel || "Selected map point";
     const detail =
-      inspection.place?.name && address
+      name && address
         ? address
-        : inspection.place?.categories.join(" · ") || undefined;
+        : meaningfulPlaceCategories(inspection.place).join(" · ") || undefined;
     return { title, detail };
   }, [inspection]);
   useEffect(() => {
@@ -630,6 +619,15 @@ export default function App() {
             ?.click();
         }}
         onModeChange={setMode}
+        onEndRoute={() => {
+          setWaypoints([]);
+          setRoute(null);
+          setRouteState("idle");
+          setRouteError(null);
+          setSelectedWaypointId(null);
+          setReplayProgress(0);
+          setReplaying(false);
+        }}
         onMoveSelect={setSelectedWaypointId}
         onNavigateInspection={() => {
           if (inspection) navigateToPoint(inspection.coordinate, null);

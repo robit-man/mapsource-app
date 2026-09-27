@@ -354,6 +354,7 @@ test("starts without a placeholder route or automatic route request", async ({
 test("requests orientation with location and follows an absolute heading", async ({
   page,
   context,
+  isMobile,
 }) => {
   await context.grantPermissions(["geolocation"], {
     origin: new URL(page.url()).origin,
@@ -388,6 +389,20 @@ test("requests orientation with location and follows an absolute heading", async
     "data-camera-bearing",
     "90.0",
   );
+  if (isMobile) {
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-user-focus-error",
+      /^(0|1)(\.\d+)?$/,
+    );
+    const targetY = Number(
+      (
+        (await page
+          .locator(".map-canvas")
+          .getAttribute("data-user-focus-target")) ?? "0,0"
+      ).split(",")[1],
+    );
+    expect(targetY).toBeLessThan((page.viewportSize()?.height ?? 800) / 3);
+  }
   await page.evaluate(() => {
     const inaccurate = new Event("deviceorientationabsolute");
     Object.defineProperties(inaccurate, {
@@ -427,6 +442,17 @@ test("plans, searches, layers, and replays a hike", async ({
   await expect(page.getByRole("button", { name: /Elevation/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /Dark/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /Light/ })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Dark/ }).locator(".layer-preview__image"),
+  ).toHaveAttribute("style", /\/map\/tiles\/raster\/dark\/13\/1303\/2929\.png/);
+  await expect(
+    page
+      .getByRole("button", { name: /Light/ })
+      .locator(".layer-preview__image"),
+  ).toHaveAttribute(
+    "style",
+    /\/map\/tiles\/raster\/light\/13\/1303\/2929\.png/,
+  );
   await expect(page.locator(".map-canvas")).toHaveAttribute(
     "data-camera",
     /.+/,
@@ -447,6 +473,14 @@ test("plans, searches, layers, and replays a hike", async ({
   await expect(page.locator(".map-canvas")).toHaveAttribute(
     "data-camera",
     originalCamera ?? "",
+  );
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-route-coordinate-count",
+    "3",
+  );
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-style-route-restored",
+    "true",
   );
   await page.getByRole("button", { name: "Map layers" }).click();
   await page.getByRole("button", { name: /Light/ }).click();
@@ -922,11 +956,18 @@ test("opens map-hold actions and routes inspected places through the sheet", asy
   );
 
   const details = page.getByLabel("Selected place details");
-  await expect(details.getByText("Trail House Cafe")).toBeVisible();
-  await expect(details.getByText("12 Forest Road Portland")).toBeVisible();
+  await expect(
+    details.getByText("12 Forest Road, Portland 97210"),
+  ).toBeVisible();
+  await expect(details.getByText(/^-?\d+\.\d{5}, -?\d+\.\d{5}$/)).toBeVisible();
+  await expect(
+    details.getByText("Trail House Cafe", { exact: true }),
+  ).toHaveCount(0);
   const pointLabel = page.locator(".intermediate-point__label");
   await expect(pointLabel.getByText("Trail House Cafe")).toBeVisible();
-  await expect(pointLabel.getByText("12 Forest Road, Portland")).toBeVisible();
+  await expect(
+    pointLabel.getByText("12 Forest Road, Portland 97210"),
+  ).toBeVisible();
   await expect(
     details.getByRole("link", { name: "Call selected place" }),
   ).toBeVisible();
@@ -1026,6 +1067,9 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
   await expect(metrics.getByText("Gain", { exact: true })).toBeVisible();
   await expect(metrics.getByText("Loss", { exact: true })).toBeVisible();
   await expect(metrics.getByText("High", { exact: true })).toBeVisible();
+  const nextTurn = page.locator(".minimized-next-turn");
+  await expect(nextTurn.getByText("Next turn", { exact: true })).toBeVisible();
+  await expect(nextTurn).toContainText("Continue toward the overlook.");
   const rail = page.getByLabel(/Route replay progress/);
   await expect(rail).toBeVisible();
   await expect(rail.locator(".minimized-waypoint")).toHaveCount(6);
@@ -1040,6 +1084,26 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
   expect(
     await rail.evaluate((element) => getComputedStyle(element).maskImage),
   ).not.toBe("none");
+  const routeActions = page.locator(".minimized-route-actions");
+  await expect(
+    routeActions.getByRole("button", { name: "Start route" }),
+  ).toBeVisible();
+  await expect(
+    routeActions.getByRole("button", { name: "End route" }),
+  ).toBeVisible();
+  const nextTurnBox = await nextTurn.boundingBox();
+  const railBox = await rail.boundingBox();
+  const actionsBox = await routeActions.boundingBox();
+  const panelBox = await panel.boundingBox();
+  expect(nextTurnBox).not.toBeNull();
+  expect(railBox).not.toBeNull();
+  expect(actionsBox).not.toBeNull();
+  expect(panelBox).not.toBeNull();
+  expect(nextTurnBox!.y + nextTurnBox!.height).toBeLessThanOrEqual(railBox!.y);
+  expect(railBox!.y + railBox!.height).toBeLessThanOrEqual(actionsBox!.y);
+  expect(
+    panelBox!.y + panelBox!.height - (actionsBox!.y + actionsBox!.height),
+  ).toBeLessThan(20);
 
   const canvas = page.locator(".maplibregl-canvas");
   const canvasBox = await canvas.boundingBox();
@@ -1069,5 +1133,13 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
   );
   expect(minimizedTarget[1]).toBeLessThan(
     (page.viewportSize()?.height ?? 800) / 2,
+  );
+  await routeActions.getByRole("button", { name: "Start route" }).click();
+  await expect(page.locator(".replay-marker")).toHaveClass(/is-active/);
+  await routeActions.getByRole("button", { name: "End route" }).click();
+  await expect(page.locator(".stop-row")).toHaveCount(0);
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-route-coordinate-count",
+    "0",
   );
 });

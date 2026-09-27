@@ -1956,7 +1956,7 @@ summary:focus-visible {
     position: relative;
     display: block;
     height: 45px;
-    margin: 13px 0 0;
+    margin: 7px 0 0;
     overflow-x: auto;
     overflow-y: hidden;
     cursor: grab;
@@ -1977,6 +1977,88 @@ summary:focus-visible {
     overscroll-behavior-x: contain;
     scrollbar-width: none;
     touch-action: pan-x;
+  }
+
+  .minimized-next-turn {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    min-height: 34px;
+    margin-top: 8px;
+    padding: 5px 7px;
+    background: rgba(216, 237, 157, 0.045);
+    border: 1px solid rgba(216, 237, 157, 0.1);
+    border-radius: 11px;
+  }
+
+  .minimized-next-turn__icon {
+    display: grid;
+    width: 27px;
+    height: 27px;
+    place-items: center;
+    color: var(--ink);
+    background: var(--lime);
+    border-radius: 50%;
+  }
+
+  .minimized-next-turn > span:nth-child(2) {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .minimized-next-turn small {
+    color: #737b71;
+    font-size: 7px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .minimized-next-turn strong {
+    overflow: hidden;
+    color: var(--paper);
+    font-size: 9px;
+    font-weight: 640;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .minimized-next-turn b {
+    color: var(--moss-light);
+    font-size: 8px;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+
+  .minimized-route-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+    margin-top: 5px;
+  }
+
+  .minimized-route-actions button {
+    display: flex;
+    height: 30px;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: var(--ink);
+    background: var(--lime);
+    border: 0;
+    border-radius: 999px;
+    font-size: 8px;
+    font-weight: 720;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .minimized-route-actions button:last-child {
+    color: #e0b9a7;
+    background: rgba(111, 53, 34, 0.3);
+    border: 1px solid rgba(197, 118, 85, 0.26);
   }
 
   .minimized-route-progress::-webkit-scrollbar {

@@ -65,6 +65,8 @@ real-backend contract for styles, tiles, previews, and route modes.
 - [x] Show real preview imagery for every layer without broken-image/question
       icons; previews are nested rounded cards, not pills.
 - [x] Preserve center, zoom, bearing, and pitch across style changes.
+- [x] Rehydrate active route geometry, traveled progress, waypoint connectors,
+      and the selected-building extrusion immediately after a style change.
 - [x] Preserve 3D terrain on Mapsource, dark, light, elevation, and satellite.
 - [x] Add distance fog/horizon blending for aggressively pitched terrain.
 - [x] When a mobile sheet covers the lower viewport, fit routes and discoveries
@@ -97,7 +99,8 @@ real-backend contract for styles, tiles, previews, and route modes.
       title/status row down; top and side insets must match.
 - [x] Half and expanded states expose the route work area with internal scroll.
 - [x] Minimized state shows compact mode-relevant distance/time/gain/loss/high
-      metrics plus replay progress.
+      metrics, the next maneuver, waypoint replay progress, and bottom-aligned
+      start/end route actions.
 - [x] Minimized progress includes named waypoints on an extended horizontal
       rail, draggable by touch, faded at both edges, and auto-panned as replay
       advances so long routes do not crowd labels.
@@ -154,13 +157,24 @@ or search`.
       than reverse-geocoding the visually displaced facade pixel.
 - [x] Keep travel-mode headers concise (`Hike`, `Bike`, `Car`, and so on)
       without redundant `plan` wording.
+- [x] Use the resolved street address as the selected-building heading, keep
+      coordinates as its subtitle, and suppress generic OSM values such as
+      `yes`, `building`, and `residential` from user-facing labels.
 - [ ] After the held point is anchored, focus it in the center of the visible
       upper map when the sheet is half open; with a minimized sheet, place it
       only slightly above the full viewport center.
 
 ## Location and heading
 
+- [ ] On the first page load, resolve the visitor's approximate region through
+      Mapsource's existing `/api/location` IP-location endpoint and focus the
+      map there before nearby/topographic context is presented. Preserve the
+      current default camera as the privacy-safe fallback when lookup fails,
+      and never let a late response override a user's camera interaction,
+      route, or explicit device-location choice.
 - [x] Location click requests both geolocation and orientation permission.
+- [x] While device tracking is active, center the user in the map area that is
+      actually visible above a half-height mobile action sheet.
 - [x] Use tilt-compensated absolute orientation, screen rotation compensation,
       circular smoothing, poor-accuracy rejection, GPS course while moving, and
       nearest-route bearing fallback.

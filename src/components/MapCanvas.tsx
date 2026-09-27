@@ -387,6 +387,29 @@ function visibleMapPadding() {
   };
 }
 
+function visibleMapFocusTarget(map: MapLibreMap) {
+  const width = map.getContainer().clientWidth;
+  const height = map.getContainer().clientHeight;
+  const panel = document.querySelector<HTMLElement>(".route-panel");
+  let x = width / 2;
+  let y = height / 2;
+  if (window.innerWidth <= 760) {
+    const panelHeight = panel?.getBoundingClientRect().height ?? 154;
+    const sheetMode = panel?.dataset.sheetMode ?? "half";
+    y =
+      sheetMode === "minimized"
+        ? height / 2 - Math.min(42, panelHeight * 0.28)
+        : Math.max(70, (height - panelHeight) / 2);
+  } else if (panel) {
+    x = (panel.getBoundingClientRect().right + width) / 2;
+  }
+  return {
+    x,
+    y,
+    offset: [x - width / 2, y - height / 2] as [number, number],
+  };
+}
+
 type CameraSnapshot = {
   center: Coordinate;
   zoom: number;
@@ -590,7 +613,9 @@ export function MapCanvas({
   const surfaceRef = useRef(surface);
   const routeRef = useRef(route);
   const waypointsRef = useRef(waypoints);
+  const replayProgressRef = useRef(replayProgress);
   const replayingRef = useRef(replaying);
+  const heldBuildingRef = useRef<BuildingSelection | null>(null);
   const userTrackingRef = useRef(false);
   const deviceHeadingRef = useRef<number | null>(null);
   const gpsCourseRef = useRef<number | null>(null);
@@ -604,7 +629,6 @@ export function MapCanvas({
     null,
   );
   const lastCameraUpdate = useRef(0);
-  const lastOrientationUpdate = useRef(0);
 
   useEffect(() => {
     selectedRef.current = selectedWaypointId;
@@ -618,6 +642,7 @@ export function MapCanvas({
     surfaceRef.current = surface;
     routeRef.current = route;
     waypointsRef.current = waypoints;
+    replayProgressRef.current = replayProgress;
     replayingRef.current = replaying;
   }, [
     onCenterChange,
@@ -627,12 +652,17 @@ export function MapCanvas({
     onMapPick,
     onNavigatePoint,
     onUserLocation,
+    replayProgress,
     replaying,
     route,
     selectedWaypointId,
     surface,
     waypoints,
   ]);
+
+  useEffect(() => {
+    heldBuildingRef.current = heldBuilding;
+  }, [heldBuilding]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -666,6 +696,7 @@ export function MapCanvas({
     });
     map.addControl(geolocate, "bottom-right");
     let attributionAdded = false;
+    let userFocusSequence = 0;
 
     const updateMapTelemetry = () => {
       const container = containerRef.current;
@@ -698,6 +729,47 @@ export function MapCanvas({
         gpsCourseRef.current ??
         routeBearing ??
         map.getBearing();
+      const target = visibleMapFocusTarget(map);
+      const focusSequence = ++userFocusSequence;
+      if (containerRef.current) {
+        containerRef.current.dataset.userFocusTarget = [
+          target.x.toFixed(1),
+          target.y.toFixed(1),
+        ].join(",");
+      }
+      const recordUserFocus = () => {
+        if (focusSequence !== userFocusSequence) return;
+        const rendered = map.project(location);
+        if (containerRef.current) {
+          containerRef.current.dataset.userFocusError = Math.hypot(
+            rendered.x - target.x,
+            rendered.y - target.y,
+          ).toFixed(2);
+          containerRef.current.dataset.userFocusRendered = [
+            rendered.x.toFixed(1),
+            rendered.y.toFixed(1),
+          ].join(",");
+        }
+      };
+      map.stop();
+      map.once("moveend", () => {
+        if (focusSequence !== userFocusSequence) return;
+        const rendered = map.project(location);
+        const correction: [number, number] = [
+          rendered.x - target.x,
+          rendered.y - target.y,
+        ];
+        if (Math.hypot(correction[0], correction[1]) < 0.75) {
+          recordUserFocus();
+          return;
+        }
+        map.once("moveend", recordUserFocus);
+        map.panBy(
+          correction,
+          { duration: 120, essential: true },
+          { geolocateSource: true },
+        );
+      });
       map.easeTo(
         {
           center: location,
@@ -714,6 +786,19 @@ export function MapCanvas({
       }
     };
 
+    let orientationFocusFrame: number | null = null;
+    const orientToLatestUser = (attempt = 0) => {
+      orientationFocusFrame = null;
+      const location = latestUserLocationRef.current;
+      if (location) {
+        orientToUser(location);
+        return;
+      }
+      if (attempt >= 60) return;
+      orientationFocusFrame = window.requestAnimationFrame(() =>
+        orientToLatestUser(attempt + 1),
+      );
+    };
     const orientationListener = (rawEvent: Event) => {
       const event = rawEvent as CompassOrientationEvent;
       const accuracy = event.webkitCompassAccuracy;
@@ -742,11 +827,10 @@ export function MapCanvas({
       if (containerRef.current) {
         containerRef.current.dataset.userHeading = smoothed.toFixed(1);
       }
-      const now = performance.now();
-      if (now - lastOrientationUpdate.current < 100) return;
-      const location = latestUserLocationRef.current;
-      if (location) orientToUser(location);
-      lastOrientationUpdate.current = now;
+      if (orientationFocusFrame !== null) {
+        window.cancelAnimationFrame(orientationFocusFrame);
+      }
+      orientToLatestUser();
     };
 
     let orientationListening = false;
@@ -803,43 +887,25 @@ export function MapCanvas({
       holdStart = null;
     };
     const focusHeldPoint = (coordinate: Coordinate) => {
-      const panel = document.querySelector<HTMLElement>(".route-panel");
-      const width = map.getContainer().clientWidth;
-      const height = map.getContainer().clientHeight;
-      let targetX = width / 2;
-      let targetY = height / 2;
-      if (window.innerWidth <= 760) {
-        const panelHeight = panel?.getBoundingClientRect().height ?? 154;
-        const sheetMode = panel?.dataset.sheetMode ?? "half";
-        targetY =
-          sheetMode === "minimized"
-            ? height / 2 - Math.min(42, panelHeight * 0.28)
-            : Math.max(70, (height - panelHeight) / 2);
-      } else if (panel) {
-        targetX = (panel.getBoundingClientRect().right + width) / 2;
-      }
-      const offset: [number, number] = [
-        targetX - width / 2,
-        targetY - height / 2,
-      ];
+      const target = visibleMapFocusTarget(map);
       if (containerRef.current) {
         containerRef.current.dataset.heldFocusTarget = [
-          targetX.toFixed(1),
-          targetY.toFixed(1),
+          target.x.toFixed(1),
+          target.y.toFixed(1),
         ].join(",");
       }
       map.once("moveend", () => {
         const rendered = map.project(coordinate);
         if (containerRef.current) {
           containerRef.current.dataset.heldFocusError = Math.hypot(
-            rendered.x - targetX,
-            rendered.y - targetY,
+            rendered.x - target.x,
+            rendered.y - target.y,
           ).toFixed(2);
         }
       });
       map.easeTo({
         center: coordinate,
-        offset,
+        offset: target.offset,
         duration: 520,
         essential: true,
       });
@@ -939,7 +1005,13 @@ export function MapCanvas({
       }
       latestUserLocationRef.current = location;
       onUserLocationRef.current({ lat: location[1], lon: location[0] });
-      orientToUser(location, event.coords.heading, event.coords.speed);
+      const positionHeading = event.coords.heading;
+      const positionSpeed = event.coords.speed;
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          orientToUser(location, positionHeading, positionSpeed);
+        });
+      });
     });
 
     map.on("styledataloading", () => setReady(false));
@@ -1107,6 +1179,49 @@ export function MapCanvas({
         },
         before,
       );
+      const restoredCoordinates = routeCoordinates(routeRef.current);
+      (map.getSource("route") as GeoJSONSource).setData({
+        type: "Feature",
+        properties: {},
+        geometry: { type: "LineString", coordinates: restoredCoordinates },
+      });
+      const restoredConnectors = routeConnectors(
+        waypointsRef.current,
+        restoredCoordinates,
+      );
+      (map.getSource("route-connectors") as GeoJSONSource).setData(
+        restoredConnectors,
+      );
+      (map.getSource("route-played") as GeoJSONSource).setData({
+        type: "Feature",
+        properties: {},
+        geometry: {
+          type: "LineString",
+          coordinates: lineAtProgress(
+            restoredCoordinates,
+            replayProgressRef.current,
+          ),
+        },
+      });
+      const restoredBuilding = heldBuildingRef.current;
+      (map.getSource("selected-building") as GeoJSONSource).setData(
+        restoredBuilding
+          ? {
+              type: "FeatureCollection",
+              features: [restoredBuilding.feature],
+            }
+          : emptyFeatures(),
+      );
+      if (containerRef.current) {
+        containerRef.current.dataset.routeCoordinateCount = String(
+          restoredCoordinates.length,
+        );
+        containerRef.current.dataset.styleRouteRestored =
+          restoredCoordinates.length > 1 ? "true" : "false";
+      }
+      if (restoredCoordinates.length > 1) {
+        preserveCameraForRouteRef.current = true;
+      }
       map.setTerrain(
         usesTerrain(surfaceRef.current)
           ? {
@@ -1181,6 +1296,9 @@ export function MapCanvas({
         orientationListener,
       );
       window.removeEventListener("deviceorientation", orientationListener);
+      if (orientationFocusFrame !== null) {
+        window.cancelAnimationFrame(orientationFocusFrame);
+      }
       cancelHold();
       if (holdFocusTimer !== null) window.clearTimeout(holdFocusTimer);
       canvasContainer.removeEventListener("pointerdown", beginHold, true);
@@ -1599,6 +1717,9 @@ export function MapCanvas({
       connectors,
     );
     if (containerRef.current) {
+      containerRef.current.dataset.routeCoordinateCount = String(
+        coordinates.length,
+      );
       containerRef.current.dataset.routeConnectorCount = String(
         connectors.features.length,
       );

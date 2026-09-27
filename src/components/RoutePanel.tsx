@@ -9,6 +9,12 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal, flushSync } from "react-dom";
+import {
+  coordinateLabel,
+  meaningfulPlaceCategories,
+  meaningfulPlaceName,
+  placeAddress,
+} from "../place-utils";
 import { elevationPath, formatDistance, formatDuration } from "../route-utils";
 import type {
   InspectionState,
@@ -25,6 +31,7 @@ type RoutePanelProps = {
   mode: RouteMode;
   onAddInspection: () => void;
   onCloseInspection: () => void;
+  onEndRoute: () => void;
   onModeChange: (mode: RouteMode) => void;
   waypoints: Waypoint[];
   onInsert: (afterIndex: number) => string | null;
@@ -167,6 +174,7 @@ export function RoutePanel({
   mode,
   onAddInspection,
   onCloseInspection,
+  onEndRoute,
   onModeChange,
   waypoints,
   onInsert,
@@ -252,7 +260,7 @@ export function RoutePanel({
   const sheetBounds = () => {
     const expanded = Math.max(320, window.innerHeight - 86);
     return {
-      minimized: Math.min(154, expanded),
+      minimized: Math.min(202, expanded),
       half: Math.min(expanded, Math.max(320, window.innerHeight * 0.5)),
       expanded,
     };
@@ -430,6 +438,15 @@ export function RoutePanel({
 
   const routeDistance = route?.summary?.distanceKm;
   const routeDuration = route?.summary?.durationSeconds;
+  const routeCoordinateCount = route?.geometry?.coordinates?.length ?? 0;
+  const replayShapeIndex = Math.round(
+    replayProgress * Math.max(0, routeCoordinateCount - 1),
+  );
+  const maneuvers = route?.maneuvers ?? [];
+  const nextManeuver =
+    maneuvers.find(
+      (maneuver) => (maneuver.shapeIndex ?? 0) >= replayShapeIndex,
+    ) ?? maneuvers[maneuvers.length - 1];
   const compactMetrics = [
     { label: "Distance", value: formatDistance(routeDistance) },
     { label: "Time", value: formatDuration(routeDuration) },
@@ -546,7 +563,7 @@ export function RoutePanel({
       </div>
 
       <section className="route-summary" aria-label="Route summary">
-        {sheetMode === "minimized" && (
+        {sheetMode === "minimized" && route && (
           <div className="minimized-metrics">
             {compactMetrics.map((metric) => (
               <div key={metric.label}>
@@ -639,6 +656,20 @@ export function RoutePanel({
           )}
         </div>
         {sheetMode === "minimized" && (
+          <div className="minimized-next-turn">
+            <span className="minimized-next-turn__icon">
+              <Icon name="route" size={15} />
+            </span>
+            <span>
+              <small>Next turn</small>
+              <strong>{nextManeuver?.instruction ?? "Route ready"}</strong>
+            </span>
+            {nextManeuver?.distanceKm !== undefined && (
+              <b>{formatDistance(nextManeuver.distanceKm)}</b>
+            )}
+          </div>
+        )}
+        {sheetMode === "minimized" && (
           <div
             ref={progressRailRef}
             aria-label={`Route replay progress ${Math.round(replayProgress * 100)}%`}
@@ -674,6 +705,18 @@ export function RoutePanel({
             </div>
           </div>
         )}
+        {sheetMode === "minimized" && route && (
+          <div className="minimized-route-actions">
+            <button onClick={onReplayRestart} type="button">
+              <Icon name="play" size={13} />
+              Start route
+            </button>
+            <button onClick={onEndRoute} type="button">
+              <Icon name="close" size={13} />
+              End route
+            </button>
+          </div>
+        )}
       </section>
 
       <div className="sheet-detail">
@@ -698,24 +741,31 @@ export function RoutePanel({
               </p>
             ) : (
               <>
-                <strong>
-                  {inspection.place?.name ??
-                    inspection.fallbackLabel ??
-                    `${inspection.coordinate.lat.toFixed(5)}, ${inspection.coordinate.lon.toFixed(5)}`}
-                </strong>
-                {inspection.place && (
-                  <p>
-                    {[
-                      inspection.place.address.housenumber,
-                      inspection.place.address.street,
-                      inspection.place.address.city,
-                    ]
-                      .filter(Boolean)
-                      .join(" ") ||
-                      inspection.place.categories.join(" · ") ||
-                      "OpenStreetMap feature"}
-                  </p>
-                )}
+                {(() => {
+                  const isBuilding =
+                    inspection.fallbackLabel === "Selected building";
+                  const address = placeAddress(inspection.place);
+                  const name = meaningfulPlaceName(inspection.place);
+                  const categories = meaningfulPlaceCategories(
+                    inspection.place,
+                  ).join(" · ");
+                  const coordinates = coordinateLabel(inspection.coordinate);
+                  const title = isBuilding
+                    ? address || name || "Selected building"
+                    : name ||
+                      address ||
+                      inspection.fallbackLabel ||
+                      coordinates;
+                  const subtitle = isBuilding
+                    ? coordinates
+                    : address || categories;
+                  return (
+                    <>
+                      <strong>{title}</strong>
+                      {subtitle && <p>{subtitle}</p>}
+                    </>
+                  );
+                })()}
                 {inspection.status === "error" && <p>{inspection.message}</p>}
                 {inspection.status === "ready" &&
                   !inspection.place &&
