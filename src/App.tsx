@@ -5,11 +5,53 @@ import { SearchBar } from "./components/SearchBar";
 import { Icon } from "./components/Icon";
 import type {
   ApiError,
+  DiscoveryPlace,
+  InspectionState,
+  MapSurface,
   RouteMode,
   RouteResponse,
   SearchResult,
+  ViewBounds,
   Waypoint,
 } from "./types";
+
+const LAYER_OPTIONS: Array<{
+  id: MapSurface;
+  label: string;
+  detail: string;
+  preview: string;
+}> = [
+  {
+    id: "mapsource",
+    label: "Mapsource",
+    detail: "Brand vector map",
+    preview: "/map/preview/mapsource.png",
+  },
+  {
+    id: "satellite",
+    label: "Satellite",
+    detail: "Esri World Imagery",
+    preview: "/map/satellite/14/2606/5859.jpg",
+  },
+  {
+    id: "elevation",
+    label: "Elevation",
+    detail: "Terrain + hillshade API",
+    preview: "/map/preview/elevation.png",
+  },
+  {
+    id: "dark",
+    label: "Dark",
+    detail: "Mapsource night map",
+    preview: "/map/preview/dark.png",
+  },
+  {
+    id: "light",
+    label: "Light",
+    detail: "Mapsource daylight map",
+    preview: "/map/preview/light.png",
+  },
+];
 
 const INITIAL_WAYPOINTS: Waypoint[] = [
   {
@@ -44,14 +86,89 @@ export default function App() {
     null,
   );
   const [center, setCenter] = useState({ lat: 45.531, lon: -122.716 });
-  const [satellite, setSatellite] = useState(false);
-  const [satelliteOpacity, setSatelliteOpacity] = useState(0.82);
-  const [terrain, setTerrain] = useState(true);
+  const [viewBounds, setViewBounds] = useState<ViewBounds>({
+    west: -122.77,
+    south: 45.49,
+    east: -122.66,
+    north: 45.58,
+  });
+  const [discoveryCategory, setDiscoveryCategory] = useState<string | null>(
+    null,
+  );
+  const [discoveryPlaces, setDiscoveryPlaces] = useState<DiscoveryPlace[]>([]);
+  const [inspection, setInspection] = useState<InspectionState | null>(null);
+  const [surface, setSurface] = useState<MapSurface>("mapsource");
   const [layersOpen, setLayersOpen] = useState(false);
   const [replayProgress, setReplayProgress] = useState(0);
   const [replaying, setReplaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState(1);
   const animationRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const preventGesture = (event: Event) => event.preventDefault();
+    const preventWheelZoom = (event: WheelEvent) => {
+      if (event.ctrlKey) event.preventDefault();
+    };
+    const preventKeyboardZoom = (event: KeyboardEvent) => {
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        ["+", "-", "=", "0"].includes(event.key)
+      ) {
+        event.preventDefault();
+      }
+    };
+    document.addEventListener("gesturestart", preventGesture, {
+      passive: false,
+    });
+    document.addEventListener("gesturechange", preventGesture, {
+      passive: false,
+    });
+    document.addEventListener("wheel", preventWheelZoom, { passive: false });
+    document.addEventListener("keydown", preventKeyboardZoom);
+    return () => {
+      document.removeEventListener("gesturestart", preventGesture);
+      document.removeEventListener("gesturechange", preventGesture);
+      document.removeEventListener("wheel", preventWheelZoom);
+      document.removeEventListener("keydown", preventKeyboardZoom);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!discoveryCategory) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams({
+        category: discoveryCategory,
+        lat: String(center.lat),
+        lon: String(center.lon),
+        west: String(viewBounds.west),
+        south: String(viewBounds.south),
+        east: String(viewBounds.east),
+        north: String(viewBounds.north),
+      });
+      fetch(`/api/discover?${params}`, { signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok)
+            throw new Error(`Discovery returned ${response.status}`);
+          return response.json() as Promise<{ places?: DiscoveryPlace[] }>;
+        })
+        .then((body) => {
+          const next = body.places ?? [];
+          setDiscoveryPlaces((current) =>
+            JSON.stringify(current) === JSON.stringify(next) ? current : next,
+          );
+        })
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === "AbortError")
+            return;
+          setDiscoveryPlaces([]);
+        });
+    }, 360);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [center.lat, center.lon, discoveryCategory, viewBounds]);
 
   const routeSignature = useMemo(
     () =>
@@ -194,33 +311,132 @@ export default function App() {
     });
   }, []);
 
+  const inspectPoint = useCallback(
+    (coordinate: { lat: number; lon: number }, reveal = true) => {
+      const revealed = (current: InspectionState | null) =>
+        reveal ||
+        Boolean(
+          current?.coordinate.lat === coordinate.lat &&
+            current.coordinate.lon === coordinate.lon &&
+            current.revealed,
+        );
+      setInspection((current) => ({
+        status: "loading",
+        coordinate,
+        place: null,
+        revealed: revealed(current),
+      }));
+      const params = new URLSearchParams({
+        lat: String(coordinate.lat),
+        lon: String(coordinate.lon),
+      });
+      fetch(`/api/inspect?${params}`)
+        .then(async (response) => {
+          if (!response.ok)
+            throw new Error(`Inspection returned ${response.status}`);
+          return response.json() as Promise<{
+            place?: DiscoveryPlace | null;
+          }>;
+        })
+        .then((body) =>
+          setInspection((current) => ({
+            status: "ready",
+            coordinate,
+            place: body.place ?? null,
+            revealed: revealed(current),
+          })),
+        )
+        .catch(() =>
+          setInspection((current) => ({
+            status: "error",
+            coordinate,
+            place: null,
+            revealed: revealed(current),
+            message: "Place details are temporarily unavailable.",
+          })),
+        );
+    },
+    [],
+  );
+
+  const addIntermediatePoint = useCallback(
+    (coordinate: { lat: number; lon: number }) => {
+      setWaypoints((current) => {
+        if (current.length >= 10) return current;
+        const next = [...current];
+        next.splice(Math.max(1, current.length - 1), 0, {
+          id: newId(),
+          label: inspection?.place?.name ?? "Selected map point",
+          ...coordinate,
+        });
+        return next;
+      });
+    },
+    [inspection?.place?.name],
+  );
+
+  const navigateToPoint = useCallback(
+    (
+      coordinate: { lat: number; lon: number },
+      userLocation: { lat: number; lon: number } | null,
+    ) => {
+      if (
+        waypoints.length >= 2 &&
+        !window.confirm("Replace the current destination with this map point?")
+      ) {
+        return;
+      }
+      const existingStart = waypoints[0];
+      const origin = userLocation
+        ? {
+            id: "current-location",
+            label: "Current location",
+            ...userLocation,
+          }
+        : existingStart;
+      if (!origin) return;
+      setWaypoints([
+        origin,
+        {
+          id: newId(),
+          label: inspection?.place?.name ?? "Selected destination",
+          ...coordinate,
+        },
+      ]);
+      setSelectedWaypointId(null);
+    },
+    [inspection?.place?.name, waypoints],
+  );
+
   return (
     <main className="app-shell">
       <MapCanvas
+        activeDiscovery={discoveryCategory}
+        discoveryPlaces={discoveryPlaces}
+        onBoundsChange={setViewBounds}
         onCenterChange={setCenter}
+        onAddIntermediate={addIntermediatePoint}
+        onInspectPoint={inspectPoint}
         onMapPick={pickWaypoint}
+        onNavigatePoint={navigateToPoint}
         onWaypointMove={moveWaypoint}
         replayProgress={replayProgress}
         replaying={replaying}
         route={route}
-        satellite={satellite}
-        satelliteOpacity={satelliteOpacity}
         selectedWaypointId={selectedWaypointId}
-        terrain={terrain}
+        surface={surface}
         waypoints={waypoints}
       />
 
-      <div className="brand-mark glass" aria-label="Mapsource Trail">
-        <span className="brand-symbol">
-          <Icon name="route" size={20} />
-        </span>
-        <span>
-          <strong>MAPSOURCE</strong>
-          <small>TRAIL</small>
-        </span>
-      </div>
-
-      <SearchBar center={center} onSelect={addSearchResult} />
+      <SearchBar
+        activeCategory={discoveryCategory}
+        center={center}
+        onCategory={(category) => {
+          setDiscoveryCategory(category);
+          if (!category) setDiscoveryPlaces([]);
+        }}
+        onSelect={addSearchResult}
+      />
 
       <div className="map-tools">
         <button
@@ -232,81 +448,74 @@ export default function App() {
         >
           <Icon name="layers" size={19} />
         </button>
-        <button
-          aria-label="Toggle terrain relief"
-          aria-pressed={terrain}
-          className={`tool-button glass ${terrain ? "is-active" : ""}`}
-          onClick={() => setTerrain((value) => !value)}
-          type="button"
-        >
-          <Icon name="terrain" size={19} />
-        </button>
         {layersOpen && (
           <div className="layers-popover glass">
             <div className="popover-heading">
               <span>Map surface</span>
               <small>Live layers</small>
             </div>
-            <button
-              className={`layer-option ${!satellite ? "is-active" : ""}`}
-              onClick={() => setSatellite(false)}
-              type="button"
-            >
-              <span className="layer-preview map-preview" />
-              <span>
-                <strong>Mapsource</strong>
-                <small>Vector paths + terrain</small>
-              </span>
-              <i />
-            </button>
-            <button
-              className={`layer-option ${satellite ? "is-active" : ""}`}
-              onClick={() => setSatellite(true)}
-              type="button"
-            >
-              <span className="layer-preview satellite-preview" />
-              <span>
-                <strong>Satellite</strong>
-                <small>Esri World Imagery</small>
-              </span>
-              <i />
-            </button>
-            {satellite && (
-              <label className="opacity-control">
-                <span>
-                  Imagery opacity{" "}
-                  <strong>{Math.round(satelliteOpacity * 100)}%</strong>
-                </span>
-                <input
-                  max="1"
-                  min="0.25"
-                  onChange={(event) =>
-                    setSatelliteOpacity(Number(event.target.value))
-                  }
-                  step="0.01"
-                  type="range"
-                  value={satelliteOpacity}
-                />
-              </label>
-            )}
-            <p className="imagery-credit">
-              <a
-                href="https://www.esri.com/en-us/legal/terms/web-site-service"
-                rel="noreferrer"
-                target="_blank"
+            {LAYER_OPTIONS.map((item) => (
+              <button
+                aria-pressed={surface === item.id}
+                className={`layer-option ${surface === item.id ? "is-active" : ""}`}
+                key={item.id}
+                onClick={() => {
+                  setSurface(item.id);
+                  setLayersOpen(false);
+                }}
+                type="button"
               >
-                Tiles © Esri
-              </a>
-              {" — Source: Esri, Maxar, Earthstar Geographics"}
-            </p>
+                <span
+                  aria-hidden="true"
+                  className={`layer-preview layer-preview--${item.id}`}
+                >
+                  <span
+                    className="layer-preview__image"
+                    style={{ backgroundImage: `url(${item.preview})` }}
+                  />
+                </span>
+                <span>
+                  <strong>{item.label}</strong>
+                  <small>{item.detail}</small>
+                </span>
+                <i />
+              </button>
+            ))}
           </div>
         )}
       </div>
 
       <RoutePanel
+        inspection={inspection}
         mode={mode}
+        onAddInspection={() => {
+          if (inspection) addIntermediatePoint(inspection.coordinate);
+        }}
+        onCloseInspection={() => setInspection(null)}
+        onInsert={(index) => {
+          if (waypoints.length >= 10) return null;
+          const id = newId();
+          setWaypoints((current) => {
+            if (current.length >= 10) return current;
+            const before = current[index];
+            const after = current[index + 1];
+            if (!before || !after) return current;
+            const next = [...current];
+            next.splice(index + 1, 0, {
+              id,
+              label: "",
+              lat: (before.lat + after.lat) / 2,
+              lon: (before.lon + after.lon) / 2,
+            });
+            return next;
+          });
+          return id;
+        }}
         onModeChange={setMode}
         onMoveSelect={setSelectedWaypointId}
+        onNavigateInspection={() => {
+          if (inspection) navigateToPoint(inspection.coordinate, null);
+        }}
         onRemove={(id) =>
           setWaypoints((current) => current.filter((point) => point.id !== id))
         }
@@ -317,6 +526,23 @@ export default function App() {
             ),
           )
         }
+        onResolve={(id, result) => {
+          const lat = result.coordinate?.lat;
+          const lon = result.coordinate?.lon;
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+          setWaypoints((current) =>
+            current.map((point) =>
+              point.id === id
+                ? {
+                    ...point,
+                    label: result.name ?? result.displayName ?? "Selected stop",
+                    lat: lat!,
+                    lon: lon!,
+                  }
+                : point,
+            ),
+          );
+        }}
         onReplayProgress={(progress) => {
           setReplayProgress(progress);
           setReplaying(false);

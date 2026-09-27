@@ -10,6 +10,8 @@ const installedChromium = [
 ].find((candidate): candidate is string =>
   Boolean(candidate && existsSync(candidate)),
 );
+const e2ePort = Number(process.env.E2E_PORT ?? 3220);
+const e2eOrigin = `http://127.0.0.1:${e2ePort}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -20,7 +22,7 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: "http://127.0.0.1:3220",
+    baseURL: e2eOrigin,
     launchOptions: installedChromium
       ? { executablePath: installedChromium }
       : {},
@@ -28,8 +30,8 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: "npm start",
-    url: "http://127.0.0.1:3220/health/live",
+    command: `PORT=${e2ePort} npm start`,
+    url: `${e2eOrigin}/health/live`,
     reuseExistingServer: true,
     timeout: 30_000,
   },

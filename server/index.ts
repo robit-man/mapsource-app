@@ -31,8 +31,19 @@ const MAX_PROXY_BYTES = 8 * 1024 * 1024;
 type WaypointInput = { lat: number; lon: number; label?: string };
 type RouteInput = {
   waypoints?: WaypointInput[];
-  mode?: "hike" | "run" | "bike";
+  mode?: "hike" | "walk" | "run" | "bike" | "car" | "transit" | "train";
 };
+
+const discoveryCategories = new Set([
+  "restaurant",
+  "cafe",
+  "shop",
+  "supermarket",
+  "pharmacy",
+  "fuel",
+  "hotel",
+  "park",
+]);
 
 let keyPromise: Promise<string> | undefined;
 let clientPromise: Promise<MapsourceApiClient> | undefined;
@@ -138,14 +149,20 @@ async function proxyBinary(
     accept: string;
     fallbackType: string;
     timeoutMs?: number;
+    method?: "GET" | "POST";
+    body?: string;
+    contentType?: string;
   },
 ) {
   const headers = new Headers({ accept: options.accept });
+  if (options.contentType) headers.set("content-type", options.contentType);
   if (options.authenticated) {
     headers.set("authorization", `Bearer ${await resolveApiKey()}`);
     headers.set("origin", demoOrigin);
   }
   const response = await fetch(url, {
+    method: options.method ?? "GET",
+    body: options.body,
     headers,
     redirect: "error",
     signal: AbortSignal.timeout(options.timeoutMs ?? 8_000),
@@ -193,7 +210,7 @@ app.addHook("onSend", async (_request, reply) => {
   reply.header("referrer-policy", "strict-origin-when-cross-origin");
   reply.header(
     "permissions-policy",
-    "geolocation=(self), camera=(), microphone=(), payment=()",
+    "geolocation=(self), accelerometer=(self), gyroscope=(self), magnetometer=(self), camera=(), microphone=(), payment=()",
   );
   reply.header(
     "content-security-policy",
@@ -277,6 +294,108 @@ app.get<{ Querystring: { q?: string; lat?: string; lon?: string } }>(
   },
 );
 
+app.get<{
+  Querystring: {
+    category?: string;
+    lat?: string;
+    lon?: string;
+    west?: string;
+    south?: string;
+    east?: string;
+    north?: string;
+  };
+}>(
+  "/api/discover",
+  { config: { rateLimit: { max: 40, timeWindow: "1 minute" } } },
+  async (request, reply) => {
+    const category = request.query.category ?? "";
+    const lat = Number(request.query.lat);
+    const lon = Number(request.query.lon);
+    const west = Number(request.query.west);
+    const south = Number(request.query.south);
+    const east = Number(request.query.east);
+    const north = Number(request.query.north);
+    if (
+      !discoveryCategories.has(category) ||
+      !finiteCoordinate(lat, lon) ||
+      ![west, south, east, north].every(Number.isFinite) ||
+      west >= east ||
+      south >= north ||
+      west < -180 ||
+      east > 180 ||
+      south < -90 ||
+      north > 90
+    ) {
+      return reply.code(400).send({
+        error: { code: "BAD_REQUEST", message: "Invalid discovery view." },
+      });
+    }
+    const northSouthMeters = Math.abs(north - south) * 111_320;
+    const eastWestMeters =
+      Math.abs(east - west) *
+      111_320 *
+      Math.max(0.15, Math.cos((lat * Math.PI) / 180));
+    const radius = Math.max(
+      300,
+      Math.min(
+        5_000,
+        Math.ceil(Math.hypot(northSouthMeters, eastWestMeters) / 2),
+      ),
+    );
+    const client = await mapsourceClient();
+    const result = await client.GET("/api/places/nearby", {
+      params: { query: { lat, lon, radius, category, limit: 80 } },
+    });
+    if (result.error)
+      return apiFailure(reply, result.response.status, result.error);
+    const data = result.data as {
+      places?: Array<{
+        coordinate?: { lat?: number; lon?: number } | null;
+        [key: string]: unknown;
+      }>;
+    };
+    const places = (data.places ?? []).filter((place) => {
+      const coordinate = place.coordinate;
+      const placeLat = coordinate?.lat;
+      const placeLon = coordinate?.lon;
+      return (
+        typeof placeLat === "number" &&
+        typeof placeLon === "number" &&
+        Number.isFinite(placeLat) &&
+        Number.isFinite(placeLon) &&
+        placeLon >= west &&
+        placeLon <= east &&
+        placeLat >= south &&
+        placeLat <= north
+      );
+    });
+    reply.header("cache-control", "private, max-age=20");
+    return { category, radius, places };
+  },
+);
+
+app.get<{ Querystring: { lat?: string; lon?: string } }>(
+  "/api/inspect",
+  { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+  async (request, reply) => {
+    const lat = Number(request.query.lat);
+    const lon = Number(request.query.lon);
+    if (!finiteCoordinate(lat, lon)) {
+      return reply.code(400).send({
+        error: { code: "BAD_REQUEST", message: "Invalid map coordinate." },
+      });
+    }
+    const client = await mapsourceClient();
+    const result = await client.GET("/api/places/reverse", {
+      params: { query: { lat, lon, radius: 180 } },
+    });
+    if (result.error)
+      return apiFailure(reply, result.response.status, result.error);
+    reply.header("cache-control", "private, max-age=20");
+    return result.data;
+  },
+);
+
 app.post<{ Body: RouteInput }>(
   "/api/route",
   {
@@ -305,19 +424,32 @@ app.post<{ Body: RouteInput }>(
       });
     }
     const mode = request.body.mode ?? "hike";
-    if (!new Set(["hike", "run", "bike"]).has(mode)) {
+    if (
+      !new Set(["hike", "walk", "run", "bike", "car", "transit", "train"]).has(
+        mode,
+      )
+    ) {
       return reply.code(400).send({
         error: {
           code: "BAD_REQUEST",
-          message: "Mode must be hike, run, or bike.",
+          message:
+            "Mode must be hike, walk, run, bike, car, transit, or train.",
         },
       });
     }
+    const costing =
+      mode === "bike"
+        ? "bicycle"
+        : mode === "car"
+          ? "auto"
+          : mode === "transit" || mode === "train"
+            ? "bus"
+            : "pedestrian";
     const client = await mapsourceClient();
     const result = await client.POST("/api/route", {
       body: {
         locations: waypoints.map(({ lat, lon }) => ({ lat, lon })),
-        costing: mode === "bike" ? "bicycle" : "pedestrian",
+        costing,
         elevation: true,
       },
     });
@@ -328,14 +460,26 @@ app.post<{ Body: RouteInput }>(
   },
 );
 
-app.get(
+app.get<{ Querystring: { surface?: string } }>(
   "/map/style.json",
   {
     config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
   },
-  async (_request, reply) => {
+  async (request, reply) => {
+    const surface = request.query.surface ?? "mapsource";
+    if (
+      !new Set(["mapsource", "dark", "light", "elevation", "satellite"]).has(
+        surface,
+      )
+    ) {
+      return reply.code(400).send({
+        error: { code: "BAD_REQUEST", message: "Unknown map surface." },
+      });
+    }
+    const styleId =
+      surface === "dark" || surface === "light" ? surface : "mapsource";
     const response = await fetch(
-      `${mapsourceOrigin}/api/styles/mapsource/style.json`,
+      `${mapsourceOrigin}/api/styles/${styleId}/style.json`,
       {
         signal: AbortSignal.timeout(5_000),
       },
@@ -378,10 +522,12 @@ app.get(
       type: "hillshade",
       source: "mapsource-terrain",
       paint: {
-        "hillshade-shadow-color": "#0a0d0a",
-        "hillshade-highlight-color": "#d8ed9d",
-        "hillshade-accent-color": "#506a55",
-        "hillshade-exaggeration": 0.28,
+        "hillshade-shadow-color": surface === "light" ? "#7c8879" : "#0a0d0a",
+        "hillshade-highlight-color":
+          surface === "elevation" ? "#f0ffb7" : "#d8ed9d",
+        "hillshade-accent-color":
+          surface === "elevation" ? "#6f905c" : "#506a55",
+        "hillshade-exaggeration": surface === "elevation" ? 0.62 : 0.24,
       },
     };
     if (style.layers)
@@ -392,6 +538,82 @@ app.get(
       );
     reply.header("cache-control", "public, max-age=300");
     return style;
+  },
+);
+
+app.get<{ Params: { style: string; z: string; x: string; y: string } }>(
+  "/map/tiles/raster/:style/:z/:x/:y.png",
+  {
+    config: { rateLimit: { max: 300, timeWindow: "1 minute" } },
+  },
+  async (request, reply) => {
+    if (request.params.style !== "dark" && request.params.style !== "light") {
+      return reply.code(400).send({
+        error: { code: "BAD_REQUEST", message: "Unknown raster style." },
+      });
+    }
+    const tile = validateTile(
+      request.params.z,
+      request.params.x,
+      request.params.y,
+      20,
+    );
+    if (!tile) {
+      return reply.code(400).send({
+        error: {
+          code: "BAD_REQUEST",
+          message: "Invalid raster tile coordinate.",
+        },
+      });
+    }
+    return proxyBinary(
+      reply,
+      `${mapsourceOrigin}/api/tiles/${request.params.style}/${tile.z}/${tile.x}/${tile.y}.png`,
+      {
+        authenticated: true,
+        accept: "image/png",
+        fallbackType: "image/png",
+      },
+    );
+  },
+);
+
+app.get<{ Params: { surface: string } }>(
+  "/map/preview/:surface.png",
+  {
+    config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+  },
+  async (request, reply) => {
+    if (
+      !new Set(["mapsource", "dark", "light", "elevation"]).has(
+        request.params.surface,
+      )
+    ) {
+      return reply.code(400).send({
+        error: { code: "BAD_REQUEST", message: "Unknown preview surface." },
+      });
+    }
+    return proxyBinary(reply, `${mapsourceOrigin}/api/render/static`, {
+      authenticated: true,
+      method: "POST",
+      body: JSON.stringify({
+        lat: 45.531,
+        lon: -122.716,
+        zoom: 13.2,
+        width: 320,
+        height: 180,
+        style:
+          request.params.surface === "elevation"
+            ? "mapsource"
+            : request.params.surface,
+        bearing: -12,
+        pitch: 34,
+      }),
+      contentType: "application/json",
+      accept: "image/png",
+      fallbackType: "image/png",
+      timeoutMs: 20_000,
+    });
   },
 );
 

@@ -1,0 +1,173 @@
+# Mapsource app interaction work queue
+
+This is the durable acceptance queue for the `app.mapsource.io` implementation.
+An item is checked when its source change and focused browser contract pass.
+The separate release gate records full validation, loopback deployment, live
+verification, and delivery. Update this file in the same commit as the
+corresponding behavior.
+
+## Release gate
+
+- [x] `npm run validate` passes from a clean production build.
+- [x] `npm audit --audit-level=high` reports no high/critical findings.
+- [x] `scripts/deployment-check.mjs` passes against an isolated production build
+      on loopback.
+- [ ] `scripts/deployment-check.mjs` passes against the supervised loopback
+      service and the live origin.
+- [ ] All seven route modes and all five map surfaces pass after the supervised
+      service is restarted (not merely after rebuilding static assets).
+- [ ] Desktop and mobile screenshots have been inspected at the live origin.
+- [ ] Commit is pushed to `main` and its GitHub Actions run is green.
+
+## Verification record
+
+This is evidence for the checkboxes above, not a substitute for the remaining
+live and device checks.
+
+| Date       | Scope                       | Command or contract                                            | Result                                                                                                             |
+| ---------- | --------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| 2026-09-26 | Full source gate            | `E2E_PORT=3221 npm run validate`                               | Pass: format, lint, TypeScript, 3 unit tests, clean build, 20 browser tests; 4 viewport-inapplicable cases skipped |
+| 2026-09-26 | Dependency audit            | `npm audit --audit-level=high`                                 | Pass: 0 vulnerabilities                                                                                            |
+| 2026-09-26 | Built-server integration    | `DEPLOYMENT_ORIGIN=http://127.0.0.1:3221 npm run deploy:check` | Pass: 5 styles, 4 previews, raster/vector/satellite tiles, and all 7 real route requests                           |
+| 2026-09-26 | Waypoint gesture regression | focused Playwright contract, repeated 3× per viewport          | Pass: 6/6; ordinary pin drag pans without rerouting, hold-drag moves with ≤1 CSS-pixel tracking error              |
+| Pending    | Supervised/live integration | loopback and `https://app.mapsource.io` deployment checks      | Not yet run for this revision                                                                                      |
+| Pending    | Device sensors              | physical iOS/Android heading and calibration exercise          | Not yet run                                                                                                        |
+
+Focused browser contracts live in `tests/e2e/app.spec.ts`. They cover location
+and heading, the complete planner flow, discovery, attribution geometry, all
+planner families, all mobile modes, zoom locking, direct waypoint placement,
+long-press actions, sheet dragging, the three snap modes, minimized metrics, and
+the long waypoint rail. `scripts/deployment-check.mjs` is the independent
+real-backend contract for styles, tiles, previews, and route modes.
+
+## Application chrome and map controls
+
+- [x] Remove the old top-left brand/chrome; retain a circular search control and
+      circular layers control.
+- [x] Expand search into a full row and close the layers menu after a selection.
+- [x] Prevent browser pinch/focus/keyboard zoom without disabling map gestures.
+- [ ] Disable page-wide text selection and native touch callouts so map holds,
+      stop reordering, and sheet drags cannot trigger browser selection UI.
+- [x] Keep every circular control circular; use pill shapes only for elongated
+      controls and calculated rounded rectangles for content cards.
+- [x] Keep the attribution control closed on load at the true bottom-right. Its
+      closed icon is centered and Mapsource green; its open state is a compact
+      rounded rectangle with the icon on the right.
+
+## Map surfaces, terrain, and camera
+
+- [x] Load real Mapsource, satellite, elevation, dark, and light surfaces.
+      Mapsource/dark/light must use Mapsource's compiled vector-style API.
+- [x] Show real preview imagery for every layer without broken-image/question
+      icons; previews are nested rounded cards, not pills.
+- [x] Preserve center, zoom, bearing, and pitch across style changes.
+- [x] Preserve 3D terrain on Mapsource, dark, light, elevation, and satellite.
+- [x] Add distance fog/horizon blending for aggressively pitched terrain.
+- [x] When a mobile sheet covers the lower viewport, fit routes and discoveries
+      into the actually visible map region above it.
+- [x] Do not re-fit the camera after direct map placement or marker dragging;
+      the touched geographic position must remain under the user's finger.
+- [x] Prove screen-coordinate parity for waypoint placement and press-and-hold:
+      the rendered pin anchor must remain within 2 CSS pixels of the original
+      pointer position at pitched/rotated desktop and mobile cameras.
+- [x] Render explicit route-snap connectors from every user waypoint to the
+      network geometry so a backend-snapped path never appears detached from
+      the selected point.
+
+## Travel modes and routing
+
+- [x] Provide hike, walk, run, bike, car, transit, and train modes with distinct
+      panels and labels.
+- [x] Keep all seven mode controls simultaneously visible/selectable on mobile.
+- [ ] Verify live geometry for every mode; car uses `auto`, transit/train use the
+      available `bus` network profile, bike uses `bicycle`, and foot modes use
+      `pedestrian`.
+- [x] Route replay supports progress, play/pause, restart, and speed.
+
+## Mobile action sheet
+
+- [x] Support three drag-snap states: minimized, half viewport, and expanded up
+      to the search controls.
+- [x] Keep the small visual drag pill, but give it a broad invisible grab area.
+- [x] Keep the grab target absolutely positioned so it does not push the plan
+      title/status row down; top and side insets must match.
+- [x] Half and expanded states expose the route work area with internal scroll.
+- [x] Minimized state shows compact mode-relevant distance/time/gain/loss/high
+      metrics plus replay progress.
+- [x] Minimized progress includes named waypoints on an extended horizontal
+      rail, draggable by touch, faded at both edges, and auto-panned as replay
+      advances so long routes do not crowd labels.
+
+## Stops and waypoint manipulation
+
+- [ ] Start with an empty planner instead of a preloaded Pittock Mansion route.
+- [ ] In the empty planner, show dashed origin actions for `Select on map or
+search` and `Current location`; destination exposes only `Select on map
+or search`.
+- [ ] Replace the far-right move-pin action in populated stop pills with an
+      always-available remove `×`; map placement remains available through the
+      empty-slot flow and dragging stays available from the stop row/map pin.
+- [x] Stops use A / intermediate number / B labels and upright map pins.
+- [x] Stop rows are pill-shaped and draggable from anywhere except explicit
+      controls; labels update during reorder.
+- [x] The dragged stop uses a body-level overlay and window-level pointer
+      tracking so reordering rows cannot move it away from the finger.
+- [x] Add-stop buttons have breathing room and insert between adjacent stops.
+- [x] A new stop starts as a focused `Search stop` field using the same local
+      Mapsource suggestions as top search; choosing one hydrates coordinates.
+- [x] Map taps and marker drags update route coordinates without subsequent
+      camera movement creating a false visual jump.
+- [x] Waypoint pins move only after a deliberate long press. A normal drag that
+      starts on a pin must pan the map exactly like a drag on ordinary map
+      space, preventing accidental route edits. The browser contract also
+      verifies that arming does not introduce a pointer-to-pin jump.
+
+## Search and visible-place discovery
+
+- [x] Expanded search fades in nearby category actions for food, coffee,
+      shopping, groceries, pharmacy, fuel, lodging, and parks.
+- [x] Category actions populate search, query the visible region, fit results
+      once, and render category-specific circular markers.
+- [x] Place popups show mapped address plus phone, website, and OpenStreetMap
+      actions only when those values exist.
+- [x] Press-and-hold on empty map space creates a temporary point with a radial
+      lower-half action cluster: add intermediate stop, inspect, and navigate.
+- [x] Inspect loads reverse-geocoded place/business data from Mapsource and
+      presents details plus route actions inside the action sheet.
+- [x] Navigate uses current device location as origin when starting a new route;
+      when a destination already exists it asks before replacing it.
+- [ ] Tapping ordinary map space outside a held-point marker/action cluster
+      clears the held point, building highlight, and unrevealed inspection.
+- [x] Resolve a held map point immediately to the mapped business/building and
+      street address, rather than requiring the separate info action first.
+- [x] When the held point intersects a rendered building, highlight that exact
+      footprint bright green while keeping the waypoint and radial actions at
+      the original pointer location.
+- [ ] After the held point is anchored, focus it in the center of the visible
+      upper map when the sheet is half open; with a minimized sheet, place it
+      only slightly above the full viewport center.
+
+## Location and heading
+
+- [x] Location click requests both geolocation and orientation permission.
+- [x] Use tilt-compensated absolute orientation, screen rotation compensation,
+      circular smoothing, poor-accuracy rejection, GPS course while moving, and
+      nearest-route bearing fallback.
+- [ ] Verify heading and calibration behavior on a real mobile sensor in the
+      deployed HTTPS application; browser simulation is necessary but not
+      sufficient for sensor acceptance.
+
+## Tests already represented in source
+
+- [x] Search, surface selection, camera preservation, terrain, fog, and replay.
+- [x] Orientation permission, heading smoothing, and calibration rejection.
+- [x] Every desktop planner family and every mobile mode control.
+- [x] Inline stop search and reorder pointer lock.
+- [x] Browser zoom lock and mobile sheet dragging.
+- [x] Business discovery and conditional actions.
+- [x] Attribution closed/open geometry.
+- [x] Direct map placement preserves camera framing.
+- [x] Long-press point actions and action-sheet inspection/navigation.
+- [x] Long waypoint progress rail overflow, touch pan, edge fade, and auto-pan.
+- [x] Pointer-to-pin parity, route-snap connectors, automatic held-point address
+      resolution, and selected-building highlighting.

@@ -17,6 +17,38 @@ export type SearchResult = {
   distanceMeters?: number;
 };
 
+export type DiscoveryPlace = {
+  id: string;
+  name: string | null;
+  categories: string[];
+  coordinate: { lat: number; lon: number } | null;
+  address: {
+    housenumber: string | null;
+    street: string | null;
+    city: string | null;
+    postcode: string | null;
+    country: string | null;
+  };
+  distanceMeters: number | null;
+  properties: Record<string, string>;
+  sources: Array<{ dataset: string; id: string; url: string }>;
+};
+
+export type ViewBounds = {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+};
+
+export type InspectionState = {
+  status: "loading" | "ready" | "error";
+  coordinate: { lat: number; lon: number };
+  place: DiscoveryPlace | null;
+  revealed: boolean;
+  message?: string;
+};
+
 export type RouteManeuver = {
   instruction?: string;
   distanceKm?: number;
@@ -48,7 +80,21 @@ export type RouteResponse = {
   };
 };
 
-export type RouteMode = "hike" | "run" | "bike";
+export type RouteMode =
+  | "hike"
+  | "walk"
+  | "run"
+  | "bike"
+  | "car"
+  | "transit"
+  | "train";
+
+export type MapSurface =
+  | "mapsource"
+  | "dark"
+  | "light"
+  | "elevation"
+  | "satellite";
 
 export type ApiError = {
   error?: {

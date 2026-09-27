@@ -27,6 +27,24 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now mapsource-app.service
 ```
 
+`enable --now` is part of the deployment contract, not a one-time convenience:
+the unit must remain linked from `multi-user.target`, depend on the enabled base
+`mapsource.service`, and use `Restart=always`. Verify boot persistence after
+every unit-file change:
+
+```bash
+systemctl is-enabled mapsource.service mapsource-app.service mapsource-tunnel.service
+systemctl show mapsource-app.service \
+  -p UnitFileState -p ActiveState -p SubState -p Restart -p WantedBy
+readlink -f /etc/systemd/system/multi-user.target.wants/mapsource-app.service
+```
+
+Expected: all three units report `enabled`; the app reports `Restart=always`,
+`WantedBy=multi-user.target`, and resolves to
+`/etc/systemd/system/mapsource-app.service`. A successful manual restart plus
+the loopback and public checks below is required before considering a service
+change complete.
+
 If a dedicated Mapsource key is needed, write only variable assignments to `/etc/mapsource-app.env`, set ownership to root, mode `0600`, and restart the unit. Never print the value during diagnostics.
 
 ## Pre-edge checks

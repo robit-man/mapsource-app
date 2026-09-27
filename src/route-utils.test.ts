@@ -6,6 +6,7 @@ import {
   formatDuration,
   haversineMeters,
   lineAtProgress,
+  nearestRouteBearing,
   pointAtProgress,
 } from "./route-utils";
 
@@ -30,6 +31,9 @@ describe("route utilities", () => {
     expect(pointAtProgress(line, 2)).toEqual(line[1]);
     expect(bearingDegrees(line[0]!, line[1]!)).toBeGreaterThan(89);
     expect(bearingDegrees(line[0]!, line[1]!)).toBeLessThan(91);
+    expect(nearestRouteBearing(line, [-121.4, 45.001])).toBeGreaterThan(89);
+    expect(nearestRouteBearing(line, [-121.4, 45.001])).toBeLessThan(91);
+    expect(nearestRouteBearing([], [-121.4, 45.001])).toBeNull();
   });
 
   it("formats hike metrics and elevation paths", () => {

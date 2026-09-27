@@ -82,6 +82,44 @@ export function bearingDegrees(a: Coordinate, b: Coordinate): number {
   return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
+export function nearestRouteBearing(
+  coordinates: Coordinate[],
+  location: Coordinate,
+): number | null {
+  if (coordinates.length < 2) return null;
+  const longitudeScale = Math.cos((location[1] * Math.PI) / 180);
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  let nearestBearing: number | null = null;
+  for (let index = 1; index < coordinates.length; index += 1) {
+    const start = coordinates[index - 1]!;
+    const end = coordinates[index]!;
+    const startX = (start[0] - location[0]) * longitudeScale;
+    const startY = start[1] - location[1];
+    const endX = (end[0] - location[0]) * longitudeScale;
+    const endY = end[1] - location[1];
+    const segmentX = endX - startX;
+    const segmentY = endY - startY;
+    const lengthSquared = segmentX ** 2 + segmentY ** 2;
+    const progress =
+      lengthSquared === 0
+        ? 0
+        : Math.max(
+            0,
+            Math.min(
+              1,
+              -(startX * segmentX + startY * segmentY) / lengthSquared,
+            ),
+          );
+    const distance =
+      (startX + progress * segmentX) ** 2 + (startY + progress * segmentY) ** 2;
+    if (distance < nearestDistance && lengthSquared > 0) {
+      nearestDistance = distance;
+      nearestBearing = bearingDegrees(start, end);
+    }
+  }
+  return nearestBearing;
+}
+
 export function formatDistance(distanceKm = 0): string {
   return distanceKm < 1
     ? `${Math.round(distanceKm * 1000)} m`

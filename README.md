@@ -7,12 +7,13 @@ The live deployment is available at [`app.mapsource.io`](https://app.mapsource.i
 ## What the example includes
 
 - Mapsource vector cartography, glyphs, terrain tiles, local place search, pedestrian/bicycle routing, maneuvers, and route elevation.
-- Hike, run, and bicycle planning with 2–10 ordered stops.
-- Draggable map stops, tap-to-reposition mode, editable stop names, and route-stop reordering.
+- Hike, walk, run, bicycle, car, public-transport, and train planning with 2–10 ordered stops. Transit views clearly distinguish network previews from live schedules.
+- Draggable map stops, tap-to-reposition mode, editable stop names, inline local search for inserted stops, and elastic route-stop reordering with live A/#/B relabeling.
 - Route replay with progress, heading-following camera, 1×/2×/4× speed, and a hydrated traveled path.
 - Elevation gain, loss, high point, profile, distance, duration, and turn-by-turn directions.
-- Optional Esri World Imagery overlay, drawn from the canonical Satellite source used by the adjacent NOCLIP Earth application. Attribution and terms remain visible.
-- Responsive glass UI: a full planner on desktop and a collapsible bottom sheet on phones.
+- Mapsource, satellite, elevation, dark, and light surfaces with real local imagery previews. Esri World Imagery comes from the canonical Satellite source used by the adjacent NOCLIP Earth application, with attribution available from the closed-by-default map information control.
+- Responsive glass UI: a full planner on desktop and a touch-tracking, draggable bottom sheet on phones.
+- Location tracking requests device orientation from the same user gesture, follows compass heading, and falls back to the nearest route bearing when heading data is unavailable. Browser-level zoom is locked while native map gestures remain active.
 
 The interface is an original Mapsource implementation. It demonstrates familiar map, activity, and trail-planning interaction patterns without copying proprietary product assets or source code.
 
@@ -86,7 +87,12 @@ npm run validate
 npm audit --audit-level=high
 ```
 
-The release gate runs formatting, lint, the sequential TypeScript compiler, unit tests with coverage, a production build, and desktop/mobile Playwright flows. The browser tests cover route planning, search, satellite layers, replay, and mobile stop repositioning.
+The release gate runs formatting, lint, the sequential TypeScript compiler, unit tests with coverage, a production build, and desktop/mobile Playwright flows. The browser tests cover route planning, expandable search, self-closing layers, all planner families, stop insertion/reordering, replay, attribution state, and the mobile sheet drag gesture.
+
+The durable requirement/status ledger is
+[`docs/interaction-work-queue.md`](docs/interaction-work-queue.md). A checked
+implementation item requires a passing focused browser contract; live deployment
+and physical-device acceptance remain separate, explicit gates in that file.
 
 After starting a production artifact, verify the live boundaries:
 

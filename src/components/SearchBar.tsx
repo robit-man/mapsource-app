@@ -1,81 +1,89 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { SearchResult } from "../types";
+import { usePlaceSearch } from "../use-place-search";
 import { Icon } from "./Icon";
 
 type SearchBarProps = {
   center: { lat: number; lon: number };
   onSelect: (result: SearchResult) => void;
+  activeCategory: string | null;
+  onCategory: (category: string | null) => void;
 };
 
-export function SearchBar({ center, onSelect }: SearchBarProps) {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
-  const [open, setOpen] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+const QUICK_FILTERS = [
+  { id: "restaurant", query: "restaurants", label: "Hungry", icon: "food" },
+  { id: "cafe", query: "coffee", label: "Coffee", icon: "coffee" },
+  { id: "shop", query: "shops", label: "Shopping", icon: "shop" },
+  {
+    id: "supermarket",
+    query: "groceries",
+    label: "Groceries",
+    icon: "grocery",
+  },
+  { id: "pharmacy", query: "pharmacy", label: "Pharmacy", icon: "pharmacy" },
+  { id: "fuel", query: "fuel", label: "Fuel", icon: "fuel" },
+  { id: "hotel", query: "hotels", label: "Stay", icon: "hotel" },
+  { id: "park", query: "parks", label: "Outdoors", icon: "park" },
+] as const;
 
-  useEffect(() => {
-    const trimmed = query.trim();
-    if (trimmed.length < 2) {
-      return;
-    }
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      setStatus("loading");
-      const params = new URLSearchParams({
-        q: trimmed,
-        lat: String(center.lat),
-        lon: String(center.lon),
-      });
-      fetch(`/api/search?${params}`, { signal: controller.signal })
-        .then(async (response) => {
-          if (!response.ok)
-            throw new Error(`Search returned ${response.status}`);
-          return response.json() as Promise<{ results?: SearchResult[] }>;
-        })
-        .then((body) => {
-          setResults(body.results ?? []);
-          setStatus("idle");
-          setOpen(true);
-        })
-        .catch((error: unknown) => {
-          if (error instanceof DOMException && error.name === "AbortError")
-            return;
-          setStatus("error");
-        });
-    }, 260);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [center.lat, center.lon, query]);
+export function SearchBar({
+  center,
+  onSelect,
+  activeCategory,
+  onCategory,
+}: SearchBarProps) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const { results, status } = usePlaceSearch(query, center);
 
   const choose = (result: SearchResult) => {
     onSelect(result);
     setQuery("");
-    setResults([]);
+    setOpen(false);
+    setExpanded(false);
+    onCategory(null);
+    inputRef.current?.blur();
+  };
+
+  const expand = () => {
+    setExpanded(true);
+    window.requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const collapse = () => {
+    setExpanded(false);
     setOpen(false);
     inputRef.current?.blur();
   };
 
   return (
-    <div className="search-shell">
+    <div className={`search-shell ${expanded ? "is-expanded" : ""}`}>
       <div className={`search-bar ${open ? "is-open" : ""}`}>
-        <Icon name="search" size={20} />
+        <button
+          aria-label="Open search"
+          className="search-toggle"
+          onClick={expand}
+          type="button"
+        >
+          <Icon name="search" size={20} />
+        </button>
         <input
           ref={inputRef}
           aria-label="Search trailheads, parks, and addresses"
           autoComplete="off"
+          disabled={!expanded}
           onChange={(event) => {
             const nextQuery = event.target.value;
             setQuery(nextQuery);
             setOpen(true);
-            if (nextQuery.trim().length < 2) {
-              setResults([]);
-              setStatus("idle");
-            }
+            onCategory(null);
           }}
           onFocus={() => setOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") collapse();
+          }}
           placeholder="Search trailheads, parks, addresses"
           spellCheck="false"
           value={query}
@@ -89,15 +97,47 @@ export function SearchBar({ center, onSelect }: SearchBarProps) {
             className="icon-button compact"
             onClick={() => {
               setQuery("");
-              setResults([]);
+              onCategory(null);
             }}
             type="button"
           >
             <Icon name="close" size={16} />
           </button>
         )}
+        {expanded && !query && (
+          <button
+            aria-label="Close search"
+            className="icon-button compact"
+            onClick={collapse}
+            type="button"
+          >
+            <Icon name="close" size={16} />
+          </button>
+        )}
       </div>
-      {open && query.trim().length >= 2 && (
+      {expanded && (
+        <div className="quick-filters" aria-label="Explore nearby">
+          {QUICK_FILTERS.map((filter) => (
+            <button
+              aria-label={filter.label}
+              aria-pressed={activeCategory === filter.id}
+              className={activeCategory === filter.id ? "is-active" : ""}
+              key={filter.id}
+              onClick={() => {
+                setQuery(filter.query);
+                setOpen(true);
+                onCategory(filter.id);
+                inputRef.current?.focus();
+              }}
+              title={filter.label}
+              type="button"
+            >
+              <Icon name={filter.icon} size={17} />
+            </button>
+          ))}
+        </div>
+      )}
+      {expanded && open && query.trim().length >= 2 && (
         <div className="search-results" role="listbox">
           <div className="search-results__meta">
             <span>
