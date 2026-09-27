@@ -12,12 +12,12 @@ corresponding behavior.
 - [x] `npm audit --audit-level=high` reports no high/critical findings.
 - [x] `scripts/deployment-check.mjs` passes against an isolated production build
       on loopback.
-- [ ] `scripts/deployment-check.mjs` passes against the supervised loopback
+- [x] `scripts/deployment-check.mjs` passes against the supervised loopback
       service and the live origin.
-- [ ] All seven route modes and all five map surfaces pass after the supervised
+- [x] All seven route modes and all five map surfaces pass after the supervised
       service is restarted (not merely after rebuilding static assets).
-- [ ] Desktop and mobile screenshots have been inspected at the live origin.
-- [ ] Commit is pushed to `main` and its GitHub Actions run is green.
+- [x] Desktop and mobile screenshots have been inspected at the live origin.
+- [x] Commit is pushed to `main` and its GitHub Actions run is green.
 
 ## Verification record
 
@@ -30,7 +30,11 @@ live and device checks.
 | 2026-09-26 | Dependency audit            | `npm audit --audit-level=high`                                 | Pass: 0 vulnerabilities                                                                                            |
 | 2026-09-26 | Built-server integration    | `DEPLOYMENT_ORIGIN=http://127.0.0.1:3221 npm run deploy:check` | Pass: 5 styles, 4 previews, raster/vector/satellite tiles, and all 7 real route requests                           |
 | 2026-09-26 | Waypoint gesture regression | focused Playwright contract, repeated 3× per viewport          | Pass: 6/6; ordinary pin drag pans without rerouting, hold-drag moves with ≤1 CSS-pixel tracking error              |
-| Pending    | Supervised/live integration | loopback and `https://app.mapsource.io` deployment checks      | Not yet run for this revision                                                                                      |
+| 2026-09-26 | Supervised/live integration | loopback and `https://app.mapsource.io` deployment checks      | Pass: health, 5 styles, 4 previews, 3 tile classes, all 7 route modes, and satellite after supervised restart      |
+| 2026-09-26 | Live waypoint interaction   | browser gesture against `https://app.mapsource.io`             | Pass: ordinary drag changed only camera; 520 ms hold moved stop at 0 px tracking error; reroute returned 200       |
+| 2026-09-26 | Boot persistence            | systemd unit state and target-link verification                | Pass: base, app, and tunnel enabled; app active with `Restart=always`; multi-user target link resolves correctly   |
+| 2026-09-26 | Live visual inspection      | 1440×900 desktop and Pixel 7 viewports                         | Pass: map, route, controls, action sheet, typography, terrain, attribution, and responsive containment inspected   |
+| 2026-09-26 | Hosted release gate         | GitHub Actions run `36300561921` for `608a782`                 | Pass: clean install, Playwright browser install, full validation, and dependency audit                             |
 | Pending    | Device sensors              | physical iOS/Android heading and calibration exercise          | Not yet run                                                                                                        |
 
 Focused browser contracts live in `tests/e2e/app.spec.ts`. They cover location
