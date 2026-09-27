@@ -298,6 +298,10 @@ location` origin actions; destination shows `Select on map or search`.
       Recompute route geometry from the restored inputs, validate and bound the
       versioned browser snapshot, and never serialize permissions, live sensor
       handles, animations, or in-flight requests.
+- [x] APP-102 Order ordinary regional place-search results strictly by distance
+      within the relevant upstream candidate set. Use lexical relevance only to
+      break distance ties, while preserving upstream intent for explicitly
+      qualified searches such as `coffee in London`.
 
 ## Release evidence required before closing in-progress work
 

@@ -36,6 +36,31 @@ describe("regional place-search ranking", () => {
     ).toEqual(["near", "near-second", "far"]);
   });
 
+  it("orders relevant candidates strictly by distance before match strength", () => {
+    const results = [
+      {
+        name: "far exact",
+        distanceMeters: 12_000,
+        match: { type: "exact" as const, score: 1 },
+      },
+      {
+        name: "nearest partial",
+        distanceMeters: 350,
+        match: { type: "partial" as const, score: 0.72 },
+      },
+      {
+        name: "middle prefix",
+        distanceMeters: 2_100,
+        match: { type: "prefix" as const, score: 0.9 },
+      },
+    ];
+    expect(
+      rankSearchForRegion(results, "forest park", portland).map(
+        (result) => result.name,
+      ),
+    ).toEqual(["nearest partial", "middle prefix", "far exact"]);
+  });
+
   it("preserves global ranking for an explicitly requested remote region", () => {
     const results = [
       { name: "London", distanceMeters: 8_000_000 },

@@ -10,12 +10,12 @@ export type RegionRankedSearchResult = {
 };
 
 const relevanceByType = {
-  exact: 0.96,
-  prefix: 0.87,
-  category: 0.8,
-  partial: 0.77,
-  fuzzy: 0.67,
-  indexed: 0.62,
+  exact: 6,
+  prefix: 5,
+  category: 4,
+  partial: 3,
+  fuzzy: 2,
+  indexed: 1,
 } as const;
 
 function distanceMeters(
@@ -44,10 +44,11 @@ export function hasExplicitSearchRegion(query: string) {
 }
 
 /**
- * Photon provides a useful global relevance order, but its soft proximity bias
- * can still put a namesake on another continent above a nearby destination.
- * Blend lexical quality with a logarithmic distance penalty for ordinary map
- * search. Explicitly location-qualified queries keep the global source order.
+ * Photon has already selected results relevant to the query. For ordinary map
+ * search, present that candidate set in strict nearest-first order; lexical
+ * match quality and source order only break distance ties. Explicitly
+ * location-qualified queries keep the upstream order because their intended
+ * region is not necessarily the current map center.
  */
 export function rankSearchForRegion<T extends RegionRankedSearchResult>(
   results: T[],
@@ -63,17 +64,17 @@ export function rankSearchForRegion<T extends RegionRankedSearchResult>(
         : distanceMeters(bias, result.coordinate);
       const relevance = result.match?.type
         ? relevanceByType[result.match.type]
-        : 0.77;
-      const proximityPenalty = Number.isFinite(distance)
-        ? Math.min(0.44, Math.log1p(distance / 25_000) * 0.07)
-        : 0.5;
-      return { result, sourceIndex, score: relevance - proximityPenalty };
+        : 3;
+      const matchScore = Number.isFinite(result.match?.score)
+        ? result.match!.score!
+        : 0;
+      return { result, sourceIndex, distance, relevance, matchScore };
     })
     .sort(
       (a, b) =>
-        b.score - a.score ||
-        (a.result.distanceMeters ?? Number.POSITIVE_INFINITY) -
-          (b.result.distanceMeters ?? Number.POSITIVE_INFINITY) ||
+        a.distance - b.distance ||
+        b.relevance - a.relevance ||
+        b.matchScore - a.matchScore ||
         a.sourceIndex - b.sourceIndex,
     )
     .slice(0, limit)

@@ -255,6 +255,9 @@ or search`.
       selected-place context after refresh from a validated, size-bounded,
       versioned local snapshot. Recalculate the route from canonical inputs and
       do not persist browser permission or live sensor/request handles.
+- [x] Sort ordinary place-search candidates nearest-first after relevance
+      filtering, using lexical quality only for equal-distance ties; do not
+      override the stated destination in explicitly region-qualified queries.
 - [ ] Physical-device regression: scene bearing is currently reported roughly
       45 degrees counter-clockwise from reality. Capture raw/transformed/source/
       map-bearing telemetry and fix the actual reference-frame selection. A
