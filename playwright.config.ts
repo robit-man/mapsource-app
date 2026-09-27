@@ -18,9 +18,10 @@ export default defineConfig({
   timeout: 45_000,
   expect: { timeout: 8_000 },
   fullyParallel: true,
-  // Every project creates a WebGL map. Capping parallel contexts avoids
-  // starving input/render frames on shared deployment hosts during validation.
-  workers: 6,
+  // Every project creates a WebGL map. GitHub's two-core runners cannot keep
+  // six maps responsive at once, so keep CI at one context per core while
+  // retaining the faster local cap on the deployment host.
+  workers: process.env.CI ? 2 : 6,
   forbidOnly: true,
   retries: 0,
   reporter: [["list"], ["html", { open: "never" }]],
