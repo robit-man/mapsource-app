@@ -242,7 +242,11 @@ or search`.
       map-bearing telemetry and fix the actual reference-frame selection. A
       retest after `e318a77` still showed roughly 25 degrees: remove camera
       interpolation lag and convert WebKit magnetic heading to true heading with
-      location/date-derived WMM2025 declination, not a constant offset.
+      location/date-derived WMM2025 declination, not a constant offset. The
+      WMM-corrected physical build is still reported roughly 20 degrees
+      counter-clockwise; audit Earth/device/screen/projected-map transforms,
+      lock to one deterministic sensor source, and smooth only the final
+      corrected bearing.
 - [x] Use tilt-compensated absolute orientation, screen rotation compensation,
       circular smoothing, poor-accuracy rejection, GPS course while moving, and
       nearest-route bearing fallback.

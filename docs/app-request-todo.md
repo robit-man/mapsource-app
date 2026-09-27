@@ -253,7 +253,12 @@ location` origin actions; destination shows `Select on map or search`.
       Physical retest after `e318a77` reduced but did not remove the error
       (roughly 25 degrees counter-clockwise). Account for both camera-animation
       lag and WebKit magnetic-north headings by applying location/date-derived
-      WMM2025 declination to the map's true-north bearing.
+      WMM2025 declination to the map's true-north bearing. A subsequent physical
+      retest after the WMM correction still reports roughly 20 degrees
+      counter-clockwise. Audit the complete Earth/device/screen/map transform,
+      keep the sensor source deterministic, convert geodetic true heading into
+      the active map projection at the live location, and restore circular
+      smoothing after all reference-frame corrections rather than before them.
 - [x] APP-094 Make place search region-aware: rank useful matches in and near
       the map's current/derived user region ahead of same-name results from
       distant countries, while retaining a deliberate path to globally search

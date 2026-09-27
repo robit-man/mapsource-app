@@ -30,6 +30,9 @@ import {
   magneticHeadingToTrue,
   navigationHeading,
   orientationHeading,
+  shortestHeadingDelta,
+  smoothHeading,
+  trueHeadingToMercatorBearing,
 } from "../orientation";
 import type { InitialMapLocation } from "../initial-map-location";
 import type {
@@ -439,6 +442,8 @@ type CompassOrientationEvent = DeviceOrientationEvent & {
   webkitCompassAccuracy?: number;
 };
 
+const MAX_USABLE_COMPASS_ERROR_DEGREES = 20;
+
 const businessIconPaths: Record<string, string> = {
   cafe: "M6 8h10v5a4 4 0 0 1-4 4h-2a4 4 0 0 1-4-4V8Zm10 2h1a2 2 0 0 1 0 4h-1M9 4v2m4-2v2",
   restaurant: "M7 4v7m-3-7v4a3 3 0 0 0 6 0V4m-3 7v9m9-16v16m0-16c3 2 3 6 0 9",
@@ -603,6 +608,7 @@ export function MapCanvas({
   const userCameraInteractedRef = useRef(false);
   const initialLocationAppliedRef = useRef(false);
   const deviceHeadingRef = useRef<number | null>(null);
+  const deviceHeadingUpdatedAtRef = useRef(0);
   const rawDeviceHeadingRef = useRef<number | null>(null);
   const deviceHeadingMagneticRef = useRef(false);
   const magneticDeclinationRef = useRef(0);
@@ -1029,9 +1035,8 @@ export function MapCanvas({
       orientationFocusFrame = null;
       const location = latestUserLocationRef.current;
       if (location) {
-        // Compass animation must not trail the sensor. GPS/location transitions
-        // retain their own smoothing, while bearing samples land exactly on the
-        // latest true-north target.
+        // Heading smoothing is applied to the fully corrected map bearing, so
+        // the camera itself must not add a second trailing interpolation.
         orientToUser(location, null, null, 0);
         return;
       }
@@ -1040,15 +1045,42 @@ export function MapCanvas({
         orientToLatestUser(attempt + 1),
       );
     };
+    let orientationSource: "webkit-compass" | "w3c-absolute" | null = null;
+    const correctHeadingForMap = (
+      heading: number,
+      isMagneticHeading: boolean,
+      location = latestUserLocationRef.current,
+    ) => {
+      const trueHeading = isMagneticHeading
+        ? magneticHeadingToTrue(heading, magneticDeclinationRef.current)
+        : heading;
+      const projectedHeading = location
+        ? trueHeadingToMercatorBearing(location, trueHeading)
+        : trueHeading;
+      return {
+        trueHeading,
+        projectedHeading,
+        projectionCorrection: shortestHeadingDelta(
+          trueHeading,
+          projectedHeading,
+        ),
+      };
+    };
     const orientationListener = (rawEvent: Event) => {
       const event = rawEvent as CompassOrientationEvent;
+      const isMagneticHeading = Number.isFinite(event.webkitCompassHeading);
+      // Some browsers emit both event names for the same physical sensor. Once
+      // the calibrated WebKit compass is present, an arbitrary/independent
+      // alpha stream must not overwrite it a few milliseconds later.
+      if (orientationSource === "webkit-compass" && !isMagneticHeading) return;
+      if (isMagneticHeading) orientationSource = "webkit-compass";
       const accuracy = event.webkitCompassAccuracy;
       const button = containerRef.current?.querySelector<HTMLElement>(
         ".maplibregl-ctrl-geolocate",
       );
       if (Number.isFinite(accuracy)) {
         if (button) button.dataset.compassAccuracy = accuracy!.toFixed(0);
-        if (accuracy! < 0 || accuracy! > 45) {
+        if (accuracy! < 0 || accuracy! >= MAX_USABLE_COMPASS_ERROR_DEGREES) {
           if (button) button.dataset.orientation = "calibrate";
           return;
         }
@@ -1059,17 +1091,20 @@ export function MapCanvas({
         window.screen.orientation?.angle ?? legacyOrientation ?? 0;
       const heading = orientationHeading(event, screenAngle);
       if (heading === null) return;
-      // The map animation already interpolates bearing. Numerically smoothing
-      // only when sensor events arrive can strand the camera tens of degrees
-      // behind the final physical heading when the browser stops emitting after
-      // the handset becomes still. Preserve the actual compass sample here.
-      const isMagneticHeading = Number.isFinite(event.webkitCompassHeading);
-      const cameraHeading = isMagneticHeading
-        ? magneticHeadingToTrue(heading, magneticDeclinationRef.current)
-        : heading;
+      orientationSource ??= "w3c-absolute";
+      const corrected = correctHeadingForMap(heading, isMagneticHeading);
+      const now = performance.now();
+      const cameraHeading = smoothHeading(
+        deviceHeadingRef.current,
+        corrected.projectedHeading,
+        deviceHeadingUpdatedAtRef.current
+          ? now - deviceHeadingUpdatedAtRef.current
+          : 1_000,
+      );
       rawDeviceHeadingRef.current = heading;
       deviceHeadingMagneticRef.current = isMagneticHeading;
       deviceHeadingRef.current = cameraHeading;
+      deviceHeadingUpdatedAtRef.current = now;
       const sensorHeading = Number.isFinite(event.webkitCompassHeading)
         ? event.webkitCompassHeading!
         : event.alpha;
@@ -1078,16 +1113,17 @@ export function MapCanvas({
         button.dataset.compassSensorHeading = Number.isFinite(sensorHeading)
           ? sensorHeading!.toFixed(1)
           : "unavailable";
-        button.dataset.compassSensorKind = Number.isFinite(
-          event.webkitCompassHeading,
-        )
-          ? "webkit-compass"
-          : "w3c-alpha";
+        button.dataset.compassSensorKind = orientationSource;
         button.dataset.compassScreenAngle = String(screenAngle);
         button.dataset.compassTransformedHeading = heading.toFixed(1);
         button.dataset.compassDeclination =
           magneticDeclinationRef.current.toFixed(2);
-        button.dataset.compassTrueHeading = cameraHeading.toFixed(1);
+        button.dataset.compassTrueHeading = corrected.trueHeading.toFixed(1);
+        button.dataset.compassProjectionCorrection =
+          corrected.projectionCorrection.toFixed(3);
+        button.dataset.compassProjectedHeading =
+          corrected.projectedHeading.toFixed(1);
+        button.dataset.compassSmoothedHeading = cameraHeading.toFixed(1);
         button.dataset.heading = cameraHeading.toFixed(1);
         button.dataset.orientation = "granted";
       }
@@ -1098,16 +1134,20 @@ export function MapCanvas({
         )
           ? sensorHeading!.toFixed(1)
           : "unavailable";
-        containerRef.current.dataset.compassSensorKind = Number.isFinite(
-          event.webkitCompassHeading,
-        )
-          ? "webkit-compass"
-          : "w3c-alpha";
+        containerRef.current.dataset.compassSensorKind = orientationSource;
         containerRef.current.dataset.compassScreenAngle = String(screenAngle);
         containerRef.current.dataset.compassTransformedHeading =
           heading.toFixed(1);
         containerRef.current.dataset.compassDeclination =
           magneticDeclinationRef.current.toFixed(2);
+        containerRef.current.dataset.compassTrueHeading =
+          corrected.trueHeading.toFixed(1);
+        containerRef.current.dataset.compassProjectionCorrection =
+          corrected.projectionCorrection.toFixed(3);
+        containerRef.current.dataset.compassProjectedHeading =
+          corrected.projectedHeading.toFixed(1);
+        containerRef.current.dataset.compassSmoothedHeading =
+          cameraHeading.toFixed(1);
         containerRef.current.dataset.compassCameraHeading =
           cameraHeading.toFixed(1);
       }
@@ -1395,10 +1435,31 @@ export function MapCanvas({
           deviceHeadingMagneticRef.current &&
           rawDeviceHeadingRef.current !== null
         ) {
-          deviceHeadingRef.current = magneticHeadingToTrue(
+          const corrected = correctHeadingForMap(
             rawDeviceHeadingRef.current,
-            declination,
+            true,
+            location,
           );
+          const now = performance.now();
+          const smoothedHeading = smoothHeading(
+            deviceHeadingRef.current,
+            corrected.projectedHeading,
+            deviceHeadingUpdatedAtRef.current
+              ? now - deviceHeadingUpdatedAtRef.current
+              : 1_000,
+          );
+          deviceHeadingRef.current = smoothedHeading;
+          deviceHeadingUpdatedAtRef.current = now;
+          if (containerRef.current) {
+            containerRef.current.dataset.compassTrueHeading =
+              corrected.trueHeading.toFixed(1);
+            containerRef.current.dataset.compassProjectionCorrection =
+              corrected.projectionCorrection.toFixed(3);
+            containerRef.current.dataset.compassProjectedHeading =
+              corrected.projectedHeading.toFixed(1);
+            containerRef.current.dataset.compassSmoothedHeading =
+              smoothedHeading.toFixed(1);
+          }
         }
         if (containerRef.current) {
           containerRef.current.dataset.compassDeclination =

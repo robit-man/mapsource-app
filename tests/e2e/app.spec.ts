@@ -727,6 +727,32 @@ test("requests orientation with location and follows an absolute heading", async
     "data-camera-bearing-source",
     "device",
   );
+  expect(
+    Math.abs(
+      Number(
+        await page
+          .locator(".map-canvas")
+          .getAttribute("data-compass-projection-correction"),
+      ),
+    ),
+  ).toBeLessThan(0.01);
+  await page.evaluate(() => {
+    const competingAlpha = new Event("deviceorientationabsolute");
+    Object.defineProperties(competingAlpha, {
+      absolute: { value: true },
+      alpha: { value: 180 },
+      beta: { value: 35 },
+      gamma: { value: 12 },
+    });
+    window.dispatchEvent(competingAlpha);
+  });
+  await expect(locate).toHaveAttribute(
+    "data-compass-sensor-kind",
+    "webkit-compass",
+  );
+  await expect
+    .poll(async () => Number(await locate.getAttribute("data-heading")))
+    .toBeCloseTo(trueHeading, 1);
   await page.getByRole("button", { name: "Current location" }).click();
   await expect(page.getByLabel("Stop 1")).toHaveValue("Current location");
   await expect(

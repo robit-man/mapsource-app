@@ -5,12 +5,24 @@ import {
   orientationHeading,
   shortestHeadingDelta,
   smoothHeading,
+  trueHeadingToMercatorBearing,
 } from "./orientation";
 
 describe("orientation conversion", () => {
   it("converts east-positive magnetic variation to true north", () => {
     expect(magneticHeadingToTrue(350, 14.5)).toBe(4.5);
     expect(magneticHeadingToTrue(20, -7)).toBe(13);
+  });
+
+  it("converts geodetic headings into the local Mercator grid", () => {
+    const portland: [number, number] = [-122.6765, 45.5231];
+    expect(trueHeadingToMercatorBearing(portland, 0)).toBeCloseTo(0, 5);
+    expect(trueHeadingToMercatorBearing(portland, 90)).toBeCloseTo(90, 3);
+    expect(trueHeadingToMercatorBearing(portland, 225)).toBeCloseTo(225, 3);
+    expect(trueHeadingToMercatorBearing([18.9553, 69.6492], 37)).toBeCloseTo(
+      37,
+      2,
+    );
   });
 
   it("converts absolute W3C angles and screen rotation to compass headings", () => {

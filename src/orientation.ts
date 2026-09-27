@@ -20,6 +20,54 @@ export function magneticHeadingToTrue(
   return normalizeHeading(magneticHeading + declination);
 }
 
+const EARTH_MEAN_RADIUS_METERS = 6_371_008.8;
+const MERCATOR_MAX_LATITUDE = 85.05112878;
+
+/**
+ * Express a geodetic true-north bearing in the local Web Mercator grid used by
+ * MapLibre. The forward point is deliberately nearby: this is a local tangent
+ * transform, not a route chord. Web Mercator is conformal, so the correction is
+ * normally very close to zero, but calculating it makes the Earth-to-map frame
+ * boundary explicit and keeps the code correct if the location approaches the
+ * projection limit.
+ */
+export function trueHeadingToMercatorBearing(
+  location: readonly [longitude: number, latitude: number],
+  trueHeading: number,
+  lookAheadMeters = 100,
+) {
+  const toRadians = Math.PI / 180;
+  const toDegrees = 180 / Math.PI;
+  const longitude = location[0] * toRadians;
+  const latitude =
+    Math.max(
+      -MERCATOR_MAX_LATITUDE,
+      Math.min(MERCATOR_MAX_LATITUDE, location[1]),
+    ) * toRadians;
+  const heading = normalizeHeading(trueHeading) * toRadians;
+  const angularDistance =
+    Math.max(0.01, lookAheadMeters) / EARTH_MEAN_RADIUS_METERS;
+  const destinationLatitude = Math.asin(
+    Math.sin(latitude) * Math.cos(angularDistance) +
+      Math.cos(latitude) * Math.sin(angularDistance) * Math.cos(heading),
+  );
+  const destinationLongitude =
+    longitude +
+    Math.atan2(
+      Math.sin(heading) * Math.sin(angularDistance) * Math.cos(latitude),
+      Math.cos(angularDistance) -
+        Math.sin(latitude) * Math.sin(destinationLatitude),
+    );
+  const mercatorNorthing = (value: number) =>
+    Math.log(Math.tan(Math.PI / 4 + value / 2));
+  const east =
+    ((destinationLongitude - longitude + Math.PI * 3) % (Math.PI * 2)) -
+    Math.PI;
+  const north =
+    mercatorNorthing(destinationLatitude) - mercatorNorthing(latitude);
+  return normalizeHeading(Math.atan2(east, north) * toDegrees);
+}
+
 export function shortestHeadingDelta(from: number, to: number) {
   return ((to - from + 540) % 360) - 180;
 }
