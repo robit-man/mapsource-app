@@ -22,6 +22,7 @@ import type {
   RouteMode,
   RouteResponse,
   SearchResult,
+  SheetMode,
   Waypoint,
 } from "../types";
 import { usePlaceSearch } from "../use-place-search";
@@ -29,6 +30,7 @@ import { Icon } from "./Icon";
 
 type RoutePanelProps = {
   focusOriginSelection: boolean;
+  initialSheetMode: SheetMode;
   inspection: InspectionState | null;
   mode: RouteMode;
   navigationActive: boolean;
@@ -49,6 +51,7 @@ type RoutePanelProps = {
   onRename: (id: string, label: string) => void;
   onMoveSelect: (id: string | null) => void;
   onNavigateInspection: () => void;
+  onSheetModeChange: (mode: SheetMode) => void;
   selectedWaypointId: string | null;
   route: RouteResponse | null;
   routeState: "idle" | "loading" | "ready" | "error";
@@ -124,8 +127,6 @@ type SheetDrag = {
   startHeight: number;
 };
 
-type SheetMode = "minimized" | "half" | "expanded";
-
 function stopLabel(
   index: number,
   length: number,
@@ -173,6 +174,7 @@ function maneuverIcon(instruction: string | undefined) {
 
 export function RoutePanel({
   focusOriginSelection,
+  initialSheetMode,
   inspection,
   mode,
   navigationActive,
@@ -193,6 +195,7 @@ export function RoutePanel({
   onRename,
   onMoveSelect,
   onNavigateInspection,
+  onSheetModeChange,
   selectedWaypointId,
   route,
   routeState,
@@ -206,7 +209,7 @@ export function RoutePanel({
   onReplaySpeed,
   onStartNavigation,
 }: RoutePanelProps) {
-  const [sheetMode, setSheetMode] = useState<SheetMode>("half");
+  const [sheetMode, setSheetMode] = useState<SheetMode>(initialSheetMode);
   const [sheetHeight, setSheetHeight] = useState<number>();
   const [sheetDragging, setSheetDragging] = useState(false);
   const sheetDragRef = useRef<SheetDrag | null>(null);
@@ -240,6 +243,10 @@ export function RoutePanel({
     if (!inlineWaypoint) return;
     inlineInputRef.current?.focus();
   }, [inlineWaypoint]);
+
+  useEffect(() => {
+    onSheetModeChange(sheetMode);
+  }, [onSheetModeChange, sheetMode]);
 
   useEffect(() => {
     if (sheetMode !== "minimized") return;

@@ -1,5 +1,14 @@
 export type Coordinate = [number, number];
 
+export type MapCameraState = {
+  center: Coordinate;
+  zoom: number;
+  bearing: number;
+  pitch: number;
+};
+
+export type SheetMode = "minimized" | "half" | "expanded";
+
 export type Waypoint = {
   id: string;
   label: string;

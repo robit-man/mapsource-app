@@ -273,6 +273,31 @@ location` origin actions; destination shows `Select on map or search`.
       while detached; both that tooltip and the location control must restore
       follow around the latest current-location fix. Pinch/rotate/zoom must not
       enter this detached state.
+- [x] APP-096 When location follow is active, let a two-finger zoom temporarily
+      move the focal point, then smoothly ease the tracked location back to its
+      locked visible-region center. Continuous GPS and compass updates must not
+      interrupt that return or make it jump.
+- [x] APP-097 While location follow is active, make the navigation compass
+      toggle between top-down and angled perspective. Persist the selected pitch
+      across compass/GPS updates instead of snapping back to the angled view.
+- [x] APP-098 Long-press the lower-right heading/compass control to replace its
+      rotating icon with a compact raw phone heading in degrees for physical
+      debugging. Long-press again to restore the icon, and suppress the click
+      action after a completed hold.
+- [ ] APP-099 Show available house numbers over residential building footprints
+      at useful close zooms, comparable to visible business names but with
+      collision/priority rules that keep dense neighborhoods legible.
+- [x] APP-100 When compass confidence is low, visibly instruct the user to
+      rotate and tilt the phone through multiple orientations to calibrate it.
+      Continue using every finite compass sample, but while genuinely moving,
+      increasingly favor measured direction of travel—especially when compass
+      confidence is poor—as part of the live heading fusion.
+- [x] APP-101 Restore durable app state across a page refresh: waypoint values,
+      order and roles; travel mode; route/replay position; map surface and
+      camera; route-panel mode; discovery filter; and selected-place context.
+      Recompute route geometry from the restored inputs, validate and bound the
+      versioned browser snapshot, and never serialize permissions, live sensor
+      handles, animations, or in-flight requests.
 
 ## Release evidence required before closing in-progress work
 

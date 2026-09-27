@@ -312,6 +312,15 @@ async function mapZoom(page: Page) {
   );
 }
 
+async function mapPitch(page: Page) {
+  return Number(
+    (
+      (await page.locator(".map-canvas").getAttribute("data-camera")) ??
+      "0,0,0,0,0"
+    ).split(",")[4],
+  );
+}
+
 async function pinchMapOpen(
   page: Page,
   context: BrowserContext,
@@ -435,6 +444,91 @@ test("starts without a placeholder route or automatic route request", async ({
   expect(routeRequestsByPage.get(page)).toBe(0);
   await expect(page.locator(".map-stop")).toHaveCount(0);
   await expect(page.locator(".stop-row")).toHaveCount(0);
+});
+
+test("restores route inputs and app presentation after refresh", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, "mobile persistence contract");
+  await seedRoute(page);
+  await page.getByRole("button", { name: "Bike" }).click();
+  await expect(page.getByText("Routing", { exact: true })).toBeVisible();
+  await expect(page.getByText("Live", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Map layers" }).click();
+  await page.getByRole("button", { name: /Dark/ }).click();
+  await page.getByRole("slider", { name: "Replay progress" }).fill("0.35");
+  await page.waitForTimeout(900);
+  await page.locator(".maplibregl-ctrl-zoom-in").click();
+  await page.waitForTimeout(420);
+  const savedZoom = await mapZoom(page);
+  await page.getByRole("button", { name: "Expand route planner" }).click();
+
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const raw = localStorage.getItem("mapsource.app-state.v1");
+        if (!raw) return null;
+        const state = JSON.parse(raw) as {
+          waypoints?: unknown[];
+          mode?: string;
+          surface?: string;
+          replayProgress?: number;
+          sheetMode?: string;
+          camera?: { zoom?: number };
+        };
+        return {
+          waypoints: state.waypoints?.length,
+          mode: state.mode,
+          surface: state.surface,
+          replayProgress: state.replayProgress,
+          sheetMode: state.sheetMode,
+          zoom: state.camera?.zoom,
+        };
+      }),
+    )
+    .toMatchObject({
+      waypoints: 2,
+      mode: "bike",
+      surface: "dark",
+      replayProgress: 0.35,
+      sheetMode: "expanded",
+    });
+  const requestsBeforeRefresh = routeRequestsByPage.get(page) ?? 0;
+
+  await page.reload();
+
+  await expect(page.getByLabel("Stop 1")).toHaveValue(
+    "Lower Macleay Trailhead",
+  );
+  await expect(page.getByLabel("Stop 2")).toHaveValue(
+    "Pittock Mansion overlook",
+  );
+  await expect(page.getByRole("button", { name: "Bike" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-surface",
+    "dark",
+  );
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-restored-camera",
+    "true",
+  );
+  await expect(
+    page.getByRole("complementary", { name: "Route planner" }),
+  ).toHaveAttribute("data-sheet-mode", "expanded");
+  await expect(
+    page.getByRole("slider", { name: "Replay progress" }),
+  ).toHaveValue("0.35");
+  await expect(
+    page.locator(".stat-primary").getByText("3.14 km"),
+  ).toBeVisible();
+  await expect
+    .poll(() => routeRequestsByPage.get(page) ?? 0)
+    .toBeGreaterThan(requestsBeforeRefresh);
+  await expect.poll(() => mapZoom(page)).toBeCloseTo(savedZoom, 1);
 });
 
 test("centers the untouched map from the shared IP location resolver", async ({
@@ -611,6 +705,14 @@ test("requests orientation with location and follows an absolute heading", async
       }
     });
     await expect.poll(() => mapZoom(page)).toBeGreaterThan(beforePinch + 1);
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-follow-return-duration",
+      "520",
+    );
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-follow-camera-transition",
+      "idle",
+    );
     const afterPinch = await mapZoom(page);
     await page.evaluate(() => {
       const orientation = new Event("deviceorientationabsolute");
@@ -622,6 +724,66 @@ test("requests orientation with location and follows an absolute heading", async
     });
     await page.waitForTimeout(260);
     await expect.poll(() => mapZoom(page)).toBeCloseTo(afterPinch, 1);
+    const compass = page.locator(".maplibregl-ctrl-compass");
+    await compass.click();
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-follow-perspective",
+      "top-down",
+    );
+    await expect.poll(() => mapPitch(page)).toBeLessThan(1);
+    await page.evaluate(() => {
+      const orientation = new Event("deviceorientationabsolute");
+      Object.defineProperties(orientation, {
+        absolute: { value: true },
+        alpha: { value: 270 },
+      });
+      window.dispatchEvent(orientation);
+    });
+    await page.waitForTimeout(160);
+    expect(await mapPitch(page)).toBeLessThan(1);
+    await compass.click();
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-follow-perspective",
+      "angled",
+    );
+    await expect.poll(() => mapPitch(page)).toBeGreaterThan(40);
+    await compass.dispatchEvent("pointerdown", {
+      pointerId: 71,
+      clientX: 20,
+      clientY: 20,
+    });
+    await page.waitForTimeout(560);
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { pointerId: 71, bubbles: true }),
+      );
+    });
+    await compass.dispatchEvent("click");
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-compass-raw-visible",
+      "true",
+    );
+    await expect(compass.locator(".map-compass-raw")).toHaveText("270°");
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-follow-perspective",
+      "angled",
+    );
+    await compass.dispatchEvent("pointerdown", {
+      pointerId: 72,
+      clientX: 20,
+      clientY: 20,
+    });
+    await page.waitForTimeout(560);
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { pointerId: 72, bubbles: true }),
+      );
+    });
+    await compass.dispatchEvent("click");
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-compass-raw-visible",
+      "false",
+    );
     await context.setGeolocation({
       latitude: 45.5362,
       longitude: -122.7125,
@@ -697,6 +859,9 @@ test("requests orientation with location and follows an absolute heading", async
     window.dispatchEvent(inaccurate);
   });
   await expect(locate).toHaveAttribute("data-orientation", "low-confidence");
+  await expect(
+    page.getByRole("status").filter({ hasText: "rotate and tilt your phone" }),
+  ).toBeVisible();
   const lowConfidenceHeading = Number(
     await locate.getAttribute("data-heading"),
   );
@@ -719,6 +884,9 @@ test("requests orientation with location and follows an absolute heading", async
     }
   });
   await expect(locate).toHaveAttribute("data-orientation", "granted");
+  await expect(
+    page.getByRole("status").filter({ hasText: "rotate and tilt your phone" }),
+  ).toBeHidden();
   const declination = Number(
     await locate.getAttribute("data-compass-declination"),
   );
@@ -787,6 +955,19 @@ test("requests orientation with location and follows an absolute heading", async
       Number(await locate.getAttribute("data-compass-movement-correction")),
     )
     .toBeLessThan(-10);
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-camera-bearing-source",
+    "fused",
+  );
+  await expect
+    .poll(async () =>
+      Number(
+        await page
+          .locator(".map-canvas")
+          .getAttribute("data-camera-course-weight"),
+      ),
+    )
+    .toBeGreaterThan(0.6);
   await page.getByRole("button", { name: "Current location" }).click();
   await expect(page.getByLabel("Stop 1")).toHaveValue("Current location");
   await expect(

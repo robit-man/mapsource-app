@@ -237,6 +237,24 @@ or search`.
       keeps GPS/progress/rerouting active, reveals `Recenter`, and restores
       current-location follow from either `Recenter` or the location control.
       Two-finger and zoom gestures must never take this path.
+- [x] Smoothly return an active location-follow camera to the locked center
+      after two-finger zoom; sensor updates must not interrupt the easing.
+- [x] With location follow active, use the lower-right compass as a persistent
+      top-down/angled perspective toggle rather than briefly resetting before
+      the next sensor update restores the angled pitch.
+- [x] Long-press that heading control to toggle a small raw phone-heading degree
+      readout in the existing button; long-press again restores the rotating
+      compass icon without also triggering the perspective click.
+- [ ] At close zooms, label residential buildings with available house numbers,
+      using collision and priority controls comparable to business labels.
+- [x] Show a calibration instruction when the compass reports low confidence;
+      while motion is established, dynamically weight GPS course more heavily
+      than the uncertain compass as part of the displayed heading.
+- [x] Restore the current route inputs and waypoint order, travel mode, replay
+      position/speed, surface and camera, sheet mode, discovery filter, and
+      selected-place context after refresh from a validated, size-bounded,
+      versioned local snapshot. Recalculate the route from canonical inputs and
+      do not persist browser permission or live sensor/request handles.
 - [ ] Physical-device regression: scene bearing is currently reported roughly
       45 degrees counter-clockwise from reality. Capture raw/transformed/source/
       map-bearing telemetry and fix the actual reference-frame selection. A

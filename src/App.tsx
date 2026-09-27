@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  loadPersistedAppState,
+  savePersistedAppState,
+  type PersistedAppState,
+} from "./app-state";
 import { MapCanvas } from "./components/MapCanvas";
 import { RoutePanel } from "./components/RoutePanel";
 import { SearchBar } from "./components/SearchBar";
@@ -24,11 +29,13 @@ import type {
   Coordinate,
   DiscoveryPlace,
   InspectionState,
+  MapCameraState,
   MapSurface,
   NavigationStatus,
   RouteMode,
   RouteResponse,
   SearchResult,
+  SheetMode,
   UserLocationFix,
   ViewBounds,
   Waypoint,
@@ -107,8 +114,13 @@ function offRouteThreshold(mode: RouteMode, accuracy: number | null) {
 }
 
 export default function App() {
-  const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
-  const [mode, setMode] = useState<RouteMode>("walk");
+  const [restoredState] = useState(() => loadPersistedAppState());
+  const [waypoints, setWaypoints] = useState<Waypoint[]>(
+    () => restoredState?.waypoints ?? [],
+  );
+  const [mode, setMode] = useState<RouteMode>(
+    () => restoredState?.mode ?? "walk",
+  );
   const [route, setRoute] = useState<RouteResponse | null>(null);
   const [routeState, setRouteState] = useState<
     "idle" | "loading" | "ready" | "error"
@@ -117,7 +129,13 @@ export default function App() {
   const [selectedWaypointId, setSelectedWaypointId] = useState<string | null>(
     null,
   );
-  const [center, setCenter] = useState({ lat: 45.531, lon: -122.716 });
+  const [center, setCenter] = useState(() => ({
+    lat: restoredState?.camera?.center[1] ?? 45.531,
+    lon: restoredState?.camera?.center[0] ?? -122.716,
+  }));
+  const [camera, setCamera] = useState<MapCameraState | null>(
+    () => restoredState?.camera ?? null,
+  );
   const [viewBounds, setViewBounds] = useState<ViewBounds>({
     west: -122.77,
     south: 45.49,
@@ -125,17 +143,26 @@ export default function App() {
     north: 45.58,
   });
   const [discoveryCategory, setDiscoveryCategory] = useState<string | null>(
-    null,
+    () => restoredState?.discoveryCategory ?? null,
   );
   const [discoveryPlaces, setDiscoveryPlaces] = useState<DiscoveryPlace[]>([]);
   const [inspection, setInspection] = useState<InspectionState | null>(null);
-  const [surface, setSurface] = useState<MapSurface>("mapsource");
+  const [surface, setSurface] = useState<MapSurface>(
+    () => restoredState?.surface ?? "mapsource",
+  );
   const [layersOpen, setLayersOpen] = useState(false);
+  const [sheetMode, setSheetMode] = useState<SheetMode>(
+    () => restoredState?.sheetMode ?? "half",
+  );
   const [initialLocation, setInitialLocation] =
     useState<InitialMapLocation | null>(null);
-  const [replayProgress, setReplayProgress] = useState(0);
+  const [replayProgress, setReplayProgress] = useState(
+    () => restoredState?.replayProgress ?? 0,
+  );
   const [replaying, setReplaying] = useState(false);
-  const [replaySpeed, setReplaySpeed] = useState(1);
+  const [replaySpeed, setReplaySpeed] = useState(
+    () => restoredState?.replaySpeed ?? 1,
+  );
   const [navigationActive, setNavigationActive] = useState(false);
   const [navigationStatus, setNavigationStatus] =
     useState<NavigationStatus>("idle");
@@ -159,6 +186,10 @@ export default function App() {
   const offRouteFixesRef = useRef(0);
   const lastRerouteAtRef = useRef(0);
   const needsNavigationOriginRef = useRef(false);
+  const restoredRouteSignatureRef = useRef(
+    restoredState?.routeSignature ?? null,
+  );
+  const restoredInspectionRef = useRef(restoredState?.inspection ?? null);
   const transportDiscoveryCategory =
     mode === "bus"
       ? "transit_stop"
@@ -265,6 +296,59 @@ export default function App() {
     [mode, waypoints],
   );
 
+  const persistedState = useMemo<Omit<PersistedAppState, "savedAt">>(
+    () => ({
+      version: 1,
+      waypoints,
+      mode,
+      surface,
+      camera,
+      sheetMode,
+      replayProgress,
+      replaySpeed,
+      discoveryCategory,
+      inspection: inspection
+        ? {
+            coordinate: inspection.coordinate,
+            revealed: inspection.revealed,
+            fallbackLabel: inspection.fallbackLabel,
+          }
+        : null,
+      routeSignature,
+    }),
+    [
+      camera,
+      discoveryCategory,
+      inspection,
+      mode,
+      replayProgress,
+      replaySpeed,
+      routeSignature,
+      sheetMode,
+      surface,
+      waypoints,
+    ],
+  );
+  const persistedStateRef = useRef(persistedState);
+
+  useEffect(() => {
+    persistedStateRef.current = persistedState;
+    const timer = window.setTimeout(() => {
+      savePersistedAppState({ ...persistedState, savedAt: Date.now() });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [persistedState]);
+
+  useEffect(() => {
+    const flush = () =>
+      savePersistedAppState({
+        ...persistedStateRef.current,
+        savedAt: Date.now(),
+      });
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, []);
+
   useEffect(() => {
     if (waypoints.length < 2) {
       const resetTimer = window.setTimeout(() => {
@@ -281,12 +365,17 @@ export default function App() {
       }, 0);
       return () => window.clearTimeout(resetTimer);
     }
+    const preserveRestoredProgress =
+      restoredRouteSignatureRef.current === routeSignature;
+    if (restoredRouteSignatureRef.current && !preserveRestoredProgress) {
+      restoredRouteSignatureRef.current = null;
+    }
     const controller = new AbortController();
     const loadingTimer = window.setTimeout(() => {
       if (controller.signal.aborted) return;
       setRouteState("loading");
       setRouteError(null);
-      setReplayProgress(0);
+      if (!preserveRestoredProgress) setReplayProgress(0);
       setReplaying(false);
     }, 0);
     const timer = window.setTimeout(() => {
@@ -307,7 +396,8 @@ export default function App() {
         .then((body) => {
           setRoute(body);
           setRouteState("ready");
-          setReplayProgress(0);
+          if (!preserveRestoredProgress) setReplayProgress(0);
+          restoredRouteSignatureRef.current = null;
           setReplaying(false);
           if (navigationActiveRef.current) {
             offRouteFixesRef.current = 0;
@@ -317,6 +407,7 @@ export default function App() {
         .catch((error: unknown) => {
           if (error instanceof DOMException && error.name === "AbortError")
             return;
+          restoredRouteSignatureRef.current = null;
           setRouteState("error");
           setRouteError(
             error instanceof Error
@@ -506,6 +597,17 @@ export default function App() {
     },
     [],
   );
+
+  useEffect(() => {
+    const restoredInspection = restoredInspectionRef.current;
+    if (!restoredInspection) return;
+    restoredInspectionRef.current = null;
+    inspectPoint(
+      restoredInspection.coordinate,
+      restoredInspection.revealed,
+      restoredInspection.fallbackLabel,
+    );
+  }, [inspectPoint]);
 
   const addIntermediatePoint = useCallback(
     (coordinate: { lat: number; lon: number }) => {
@@ -711,10 +813,12 @@ export default function App() {
         activeDiscovery={mapDiscoveryCategory}
         discoveryPlaces={discoveryPlaces}
         heldPointDetails={heldPointDetails}
+        initialCamera={restoredState?.camera ?? null}
         initialLocation={initialLocation}
         mode={mode}
         navigationActive={navigationActive}
         onBoundsChange={setViewBounds}
+        onCameraChange={setCamera}
         onCenterChange={setCenter}
         onAddIntermediate={addIntermediatePoint}
         onInspectPoint={inspectPoint}
@@ -791,6 +895,7 @@ export default function App() {
       </div>
 
       <RoutePanel
+        initialSheetMode={restoredState?.sheetMode ?? "half"}
         inspection={inspection}
         focusOriginSelection={selectedWaypointId === "pending-origin"}
         mode={mode}
@@ -914,6 +1019,7 @@ export default function App() {
           if (replayProgress >= 1) setReplayProgress(0);
           setReplaying((value) => !value);
         }}
+        onSheetModeChange={setSheetMode}
         onStartNavigation={startNavigation}
         onReorder={reorder}
         replayProgress={replayProgress}

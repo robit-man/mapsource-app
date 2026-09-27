@@ -100,23 +100,26 @@ describe("orientation conversion", () => {
     expect(unstable.correction).toBe(correction);
   });
 
-  it("keeps device direction distinct from GPS course between sensor events", () => {
+  it("favors movement course while moving and compass while stationary", () => {
+    const moving = navigationHeading({
+      deviceHeading: 90,
+      deviceConfidence: 0.1,
+      positionHeading: 45,
+      positionSpeed: 2,
+      gpsCourse: 44,
+      routeBearing: 40,
+      mapBearing: 0,
+    });
+    expect(moving.source).toBe("fused");
+    expect(moving.heading).toBeCloseTo(48.6, 5);
     expect(
       navigationHeading({
         deviceHeading: 90,
+        deviceConfidence: 0.1,
         positionHeading: 45,
-        positionSpeed: 2,
+        positionSpeed: 0,
         gpsCourse: 44,
-        routeBearing: 40,
-        mapBearing: 0,
-      }),
-    ).toEqual({ heading: 90, source: "device" });
-    expect(
-      navigationHeading({
-        deviceHeading: 90,
-        positionHeading: 45,
-        positionSpeed: 2,
-        gpsCourse: 44,
+        gpsSpeed: 0,
         routeBearing: 40,
         mapBearing: 0,
       }),

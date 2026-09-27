@@ -150,27 +150,45 @@ export function orientationHeading(
 
 type NavigationHeadingInput = {
   deviceHeading: number | null;
+  deviceConfidence?: number;
   positionHeading: number | null | undefined;
   positionSpeed: number | null | undefined;
   gpsCourse: number | null;
+  gpsSpeed?: number | null;
   routeBearing: number | null;
   mapBearing: number;
 };
 
 export function navigationHeading(input: NavigationHeadingInput) {
-  // A compass heading and a GPS course describe different things. Some mobile
-  // browsers pause orientation events while the device is held still; treating
-  // the last compass sample as stale then silently turns the map toward the
-  // direction of travel instead of the direction the handset is facing.
-  // Retain the calibrated compass for the lifetime of the tracking session and
-  // use course/route bearings only when no compass sample has ever arrived.
+  const positionCourseAvailable =
+    Number.isFinite(input.positionHeading) && (input.positionSpeed ?? 0) >= 0.6;
+  const courseHeading = positionCourseAvailable
+    ? normalizeHeading(input.positionHeading!)
+    : input.gpsCourse;
+  const courseSpeed = positionCourseAvailable
+    ? input.positionSpeed!
+    : (input.gpsSpeed ?? 0);
   if (input.deviceHeading !== null) {
+    if (courseHeading !== null && courseSpeed >= 0.6) {
+      const motionWeight = Math.max(0, Math.min(1, (courseSpeed - 0.3) / 0.9));
+      const confidence = Math.max(
+        0,
+        Math.min(1, input.deviceConfidence ?? 0.7),
+      );
+      const courseWeight = motionWeight * (0.65 + 0.3 * (1 - confidence));
+      return {
+        heading: normalizeHeading(
+          input.deviceHeading +
+            shortestHeadingDelta(input.deviceHeading, courseHeading) *
+              courseWeight,
+        ),
+        source: "fused" as const,
+        courseWeight,
+      };
+    }
     return { heading: input.deviceHeading, source: "device" as const };
   }
-  if (
-    Number.isFinite(input.positionHeading) &&
-    (input.positionSpeed ?? 0) >= 0.8
-  ) {
+  if (positionCourseAvailable) {
     return {
       heading: normalizeHeading(input.positionHeading!),
       source: "course" as const,

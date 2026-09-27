@@ -41,6 +41,7 @@ import type { InitialMapLocation } from "../initial-map-location";
 import type {
   Coordinate,
   DiscoveryPlace,
+  MapCameraState,
   MapSurface,
   RouteMode,
   RouteResponse,
@@ -55,6 +56,7 @@ type MapCanvasProps = {
   waypoints: Waypoint[];
   route: RouteResponse | null;
   heldPointDetails: { title: string; detail?: string } | null;
+  initialCamera: MapCameraState | null;
   initialLocation: InitialMapLocation | null;
   mode: RouteMode;
   navigationActive: boolean;
@@ -77,6 +79,7 @@ type MapCanvasProps = {
   onUserLocation: (fix: UserLocationFix) => void;
   onUserTrackingChange: (active: boolean) => void;
   onCenterChange: (coordinate: { lat: number; lon: number }) => void;
+  onCameraChange: (camera: MapCameraState) => void;
   surface: MapSurface;
   replayProgress: number;
   replaying: boolean;
@@ -563,6 +566,7 @@ export function MapCanvas({
   waypoints,
   route,
   heldPointDetails,
+  initialCamera,
   initialLocation,
   mode,
   navigationActive,
@@ -575,6 +579,7 @@ export function MapCanvas({
   onUserLocation,
   onUserTrackingChange,
   onCenterChange,
+  onCameraChange,
   surface,
   replayProgress,
   replaying,
@@ -598,6 +603,7 @@ export function MapCanvas({
   const onUserLocationRef = useRef(onUserLocation);
   const onUserTrackingChangeRef = useRef(onUserTrackingChange);
   const onCenterChangeRef = useRef(onCenterChange);
+  const onCameraChangeRef = useRef(onCameraChange);
   const onBoundsChangeRef = useRef(onBoundsChange);
   const surfaceRef = useRef(surface);
   const modeRef = useRef(mode);
@@ -609,7 +615,8 @@ export function MapCanvas({
   const userTrackingRef = useRef(false);
   const userFollowingRef = useRef(false);
   const userCameraInteractedRef = useRef(false);
-  const initialLocationAppliedRef = useRef(false);
+  const initialLocationAppliedRef = useRef(Boolean(initialCamera));
+  const initialCameraRef = useRef(initialCamera);
   const deviceHeadingRef = useRef<number | null>(null);
   const deviceHeadingUpdatedAtRef = useRef(0);
   const deviceHeadingConfidenceRef = useRef(0.7);
@@ -619,12 +626,20 @@ export function MapCanvas({
   const movementHeadingCorrectionRef = useRef(0);
   const movementHeadingResidualRef = useRef<number | null>(null);
   const movementCourseAnchorRef = useRef<Coordinate | null>(null);
+  const movementCourseAnchorAtRef = useRef<number | null>(null);
+  const movementCourseCandidateRef = useRef<{
+    heading: number;
+    samples: number;
+    updatedAt: number;
+  } | null>(null);
   const gpsCourseRef = useRef<number | null>(null);
+  const gpsSpeedRef = useRef<number | null>(null);
+  const gpsCourseUpdatedAtRef = useRef(0);
   const latestUserLocationRef = useRef<Coordinate | null>(null);
   const loadedSurfaceRef = useRef(surface);
   const pendingCameraRef = useRef<CameraSnapshot | null>(null);
   const resumeFollowAfterStyleRef = useRef(false);
-  const preserveCameraForRouteRef = useRef(false);
+  const preserveCameraForRouteRef = useRef(Boolean(initialCamera));
   const [ready, setReady] = useState(false);
   const [heldPoint, setHeldPoint] = useState<Coordinate | null>(null);
   const [heldBuilding, setHeldBuilding] = useState<BuildingSelection | null>(
@@ -641,6 +656,7 @@ export function MapCanvas({
     onUserLocationRef.current = onUserLocation;
     onUserTrackingChangeRef.current = onUserTrackingChange;
     onCenterChangeRef.current = onCenterChange;
+    onCameraChangeRef.current = onCameraChange;
     onBoundsChangeRef.current = onBoundsChange;
     surfaceRef.current = surface;
     modeRef.current = mode;
@@ -650,6 +666,7 @@ export function MapCanvas({
     replayingRef.current = replaying;
   }, [
     onCenterChange,
+    onCameraChange,
     onAddIntermediate,
     onBoundsChange,
     onInspectPoint,
@@ -673,18 +690,20 @@ export function MapCanvas({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
     const mapContainer = containerRef.current;
+    const restoredCamera = initialCameraRef.current;
     const map = new MapLibreMap({
       container: mapContainer,
       style: `/map/style.json?surface=${surfaceRef.current}`,
-      center: [-122.716, 45.531],
-      zoom: 13.4,
-      pitch: 42,
-      bearing: -18,
+      center: restoredCamera?.center ?? [-122.716, 45.531],
+      zoom: restoredCamera?.zoom ?? 13.4,
+      pitch: restoredCamera?.pitch ?? 42,
+      bearing: restoredCamera?.bearing ?? -18,
       maxPitch: 70,
       fadeDuration: 520,
       attributionControl: false,
       cooperativeGestures: false,
     });
+    if (restoredCamera) mapContainer.dataset.restoredCamera = "true";
     mapRef.current = map;
     map.touchZoomRotate.enable();
     const attribution = new AttributionControl({
@@ -694,10 +713,25 @@ export function MapCanvas({
         '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a>',
       ],
     });
-    map.addControl(
-      new NavigationControl({ showCompass: true, visualizePitch: true }),
-      "bottom-right",
+    const navigationControl = new NavigationControl({
+      showCompass: true,
+      visualizePitch: true,
+    });
+    map.addControl(navigationControl, "bottom-right");
+    const compassButton = mapContainer.querySelector<HTMLButtonElement>(
+      ".maplibregl-ctrl-compass",
     );
+    const compassRawLabel = document.createElement("span");
+    compassRawLabel.className = "map-compass-raw";
+    compassRawLabel.ariaHidden = "true";
+    compassRawLabel.textContent = "--°";
+    compassButton?.append(compassRawLabel);
+    const compassCalibrationHint = document.createElement("div");
+    compassCalibrationHint.className = "map-compass-calibration";
+    compassCalibrationHint.setAttribute("role", "status");
+    compassCalibrationHint.textContent =
+      "Compass uncertain — rotate and tilt your phone, including flipping it through several orientations, to calibrate.";
+    mapContainer.append(compassCalibrationHint);
     // MapLibre's GeolocateControl owns its own camera and calls easeTo for each
     // GPS update. On a real handset, a fix arriving while two fingers remain on
     // the screen cancels the in-progress pinch. Keep its familiar control
@@ -798,9 +832,53 @@ export function MapCanvas({
     let preserveMultiTouchFollow = false;
     let preserveZoomFollow = false;
     let followedUserZoom: number | null = null;
+    let followPerspective: "angled" | "top-down" = "angled";
+    let followCameraTransition: "gesture-relock" | "perspective" | null = null;
+    let followCameraTransitionTimer: number | null = null;
+    let compassRawVisible = false;
+    let latestRawSensorHeading: number | null = null;
+    let compassHoldTimer: number | null = null;
+    let compassHoldPointer: {
+      id: number;
+      x: number;
+      y: number;
+    } | null = null;
+    let suppressCompassClick = false;
     let locationWatchId: number | null = null;
     let panelFocusFrame: number | null = null;
     let surfaceTransitionTimer: number | null = null;
+
+    const followedPitch = () =>
+      followPerspective === "top-down" ? 0 : routeRef.current ? 54 : 42;
+
+    const finishFollowCameraTransition = (
+      transition?: "gesture-relock" | "perspective",
+    ) => {
+      if (transition && followCameraTransition !== transition) return;
+      followCameraTransition = null;
+      if (followCameraTransitionTimer !== null) {
+        window.clearTimeout(followCameraTransitionTimer);
+        followCameraTransitionTimer = null;
+      }
+      if (containerRef.current) {
+        containerRef.current.dataset.followCameraTransition = "idle";
+      }
+    };
+
+    const beginFollowCameraTransition = (
+      transition: "gesture-relock" | "perspective",
+      fallbackMs: number,
+    ) => {
+      finishFollowCameraTransition();
+      followCameraTransition = transition;
+      if (containerRef.current) {
+        containerRef.current.dataset.followCameraTransition = transition;
+      }
+      followCameraTransitionTimer = window.setTimeout(
+        () => finishFollowCameraTransition(transition),
+        fallbackMs,
+      );
+    };
 
     const positionRecenterButton = () => {
       const container = containerRef.current;
@@ -812,6 +890,27 @@ export function MapCanvas({
       const locationBox = locationButton.getBoundingClientRect();
       recenterButton.style.top = `${locationBox.top - containerBox.top + (locationBox.height - recenterButton.offsetHeight) / 2}px`;
       recenterButton.style.right = `${containerBox.right - locationBox.left + 9}px`;
+    };
+
+    const positionCompassCalibrationHint = () => {
+      const container = containerRef.current;
+      if (!container || !compassButton) return;
+      const containerBox = container.getBoundingClientRect();
+      const compassBox = compassButton.getBoundingClientRect();
+      compassCalibrationHint.style.top = `${compassBox.top - containerBox.top + (compassBox.height - compassCalibrationHint.offsetHeight) / 2}px`;
+      compassCalibrationHint.style.right = `${containerBox.right - compassBox.left + 10}px`;
+    };
+
+    const syncCompassCalibrationHint = (lowConfidence: boolean) => {
+      compassCalibrationHint.classList.toggle("is-visible", lowConfidence);
+      if (containerRef.current) {
+        containerRef.current.dataset.compassCalibrationHint = lowConfidence
+          ? "visible"
+          : "hidden";
+      }
+      if (lowConfidence) {
+        window.requestAnimationFrame(positionCompassCalibrationHint);
+      }
     };
 
     const syncLocationButton = () => {
@@ -829,6 +928,7 @@ export function MapCanvas({
     };
 
     const setCameraFollowing = (following: boolean) => {
+      if (!following) finishFollowCameraTransition();
       userFollowingRef.current = following;
       syncLocationButton();
       recenterButton.classList.toggle(
@@ -862,24 +962,33 @@ export function MapCanvas({
       positionHeading?: number | null,
       positionSpeed?: number | null,
       duration = 180,
+      allowFollowTransition = false,
     ) => {
       if (
         !userFollowingRef.current ||
         replayingRef.current ||
         userZooming ||
         preserveMultiTouchFollow ||
-        userAdjustingCamera
+        userAdjustingCamera ||
+        (followCameraTransition !== null && !allowFollowTransition)
       )
         return;
+      const transitionAtStart = allowFollowTransition
+        ? followCameraTransition
+        : null;
       const routeBearing = nearestRouteBearing(
         routeCoordinates(routeRef.current),
         location,
       );
+      const gpsCourseIsFresh =
+        performance.now() - gpsCourseUpdatedAtRef.current <= 2_500;
       const resolvedHeading = navigationHeading({
         deviceHeading: deviceHeadingRef.current,
+        deviceConfidence: deviceHeadingConfidenceRef.current,
         positionHeading,
         positionSpeed,
-        gpsCourse: gpsCourseRef.current,
+        gpsCourse: gpsCourseIsFresh ? gpsCourseRef.current : null,
+        gpsSpeed: gpsCourseIsFresh ? gpsSpeedRef.current : null,
         routeBearing,
         mapBearing: map.getBearing(),
       });
@@ -906,6 +1015,9 @@ export function MapCanvas({
             rendered.y.toFixed(1),
           ].join(",");
         }
+        if (transitionAtStart === "gesture-relock") {
+          finishFollowCameraTransition("gesture-relock");
+        }
       };
       map.stop();
       map.once("moveend", () => {
@@ -922,7 +1034,10 @@ export function MapCanvas({
         map.once("moveend", recordUserFocus);
         map.panBy(
           correction,
-          { duration: 120, essential: true },
+          {
+            duration: transitionAtStart === "gesture-relock" ? 260 : 120,
+            essential: true,
+          },
           { geolocateSource: true },
         );
       });
@@ -932,8 +1047,12 @@ export function MapCanvas({
           offset: target.offset,
           zoom: followedUserZoom,
           bearing: heading,
-          pitch: routeRef.current ? 54 : 42,
+          pitch: followedPitch(),
           duration,
+          easing:
+            duration > 0
+              ? (progress: number) => 1 - Math.pow(1 - progress, 3)
+              : undefined,
           essential: true,
         },
         { geolocateSource: true },
@@ -943,6 +1062,10 @@ export function MapCanvas({
         containerRef.current.dataset.cameraBearingTarget = heading.toFixed(1);
         containerRef.current.dataset.cameraBearingSource =
           resolvedHeading.source;
+        containerRef.current.dataset.cameraCourseWeight =
+          typeof resolvedHeading.courseWeight === "number"
+            ? resolvedHeading.courseWeight.toFixed(3)
+            : "0.000";
       }
     };
 
@@ -955,8 +1078,21 @@ export function MapCanvas({
       // Follow never needs to be re-enabled after zoom now that this component
       // owns the geolocation camera. A queued post-pinch frame must not be able
       // to undo a later one-finger detach.
-      if (!userTrackingRef.current || !userFollowingRef.current) return;
-      refocusTrackedUser();
+      if (
+        !userTrackingRef.current ||
+        !userFollowingRef.current ||
+        preserveMultiTouchFollow ||
+        userZooming ||
+        userAdjustingCamera
+      )
+        return;
+      const location = latestUserLocationRef.current;
+      if (!location) return;
+      beginFollowCameraTransition("gesture-relock", 1_000);
+      if (containerRef.current) {
+        containerRef.current.dataset.followReturnDuration = "520";
+      }
+      orientToUser(location, null, null, 520, true);
     };
 
     const recenterOnUser = () => {
@@ -1016,6 +1152,109 @@ export function MapCanvas({
         window.requestAnimationFrame(refocusTrackedUser);
       }
     };
+    const syncCompassRawLabel = () => {
+      compassRawLabel.textContent = Number.isFinite(latestRawSensorHeading)
+        ? `${Math.round(normalizeHeading(latestRawSensorHeading!))}°`
+        : "--°";
+      compassButton?.classList.toggle("shows-raw-heading", compassRawVisible);
+      if (containerRef.current) {
+        containerRef.current.dataset.compassRawVisible =
+          String(compassRawVisible);
+      }
+    };
+    const clearCompassHold = () => {
+      if (compassHoldTimer !== null) {
+        window.clearTimeout(compassHoldTimer);
+        compassHoldTimer = null;
+      }
+      compassHoldPointer = null;
+    };
+    const startCompassHold = (event: PointerEvent) => {
+      clearCompassHold();
+      compassHoldPointer = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+      };
+      compassHoldTimer = window.setTimeout(() => {
+        compassHoldTimer = null;
+        compassHoldPointer = null;
+        compassRawVisible = !compassRawVisible;
+        suppressCompassClick = true;
+        syncCompassRawLabel();
+      }, 520);
+    };
+    const moveCompassHold = (event: PointerEvent) => {
+      if (!compassHoldPointer || event.pointerId !== compassHoldPointer.id)
+        return;
+      if (
+        Math.hypot(
+          event.clientX - compassHoldPointer.x,
+          event.clientY - compassHoldPointer.y,
+        ) > 8
+      ) {
+        clearCompassHold();
+      }
+    };
+    const endCompassHold = (event: PointerEvent) => {
+      if (compassHoldPointer && event.pointerId === compassHoldPointer.id) {
+        clearCompassHold();
+      }
+    };
+    const blockCompassContextMenu = (event: Event) => event.preventDefault();
+    const toggleFollowPerspective = (event: MouseEvent) => {
+      if (suppressCompassClick) {
+        suppressCompassClick = false;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (!userTrackingRef.current) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      followPerspective =
+        followPerspective === "angled" ? "top-down" : "angled";
+      userFocusSequence += 1;
+      map.stop();
+      beginFollowCameraTransition("perspective", 750);
+      const targetPitch = followedPitch();
+      if (containerRef.current) {
+        containerRef.current.dataset.followPerspective = followPerspective;
+        containerRef.current.dataset.followPitchTarget = targetPitch.toFixed(1);
+      }
+      if (compassButton) {
+        compassButton.setAttribute(
+          "aria-label",
+          followPerspective === "top-down"
+            ? "Switch to angled perspective"
+            : "Switch to top-down perspective",
+        );
+        compassButton.title =
+          followPerspective === "top-down"
+            ? "Switch to angled perspective"
+            : "Switch to top-down perspective";
+        compassButton.setAttribute(
+          "aria-pressed",
+          String(followPerspective === "top-down"),
+        );
+      }
+      map.once("moveend", () => finishFollowCameraTransition("perspective"));
+      map.easeTo(
+        {
+          pitch: targetPitch,
+          duration: 420,
+          easing: (progress) => 1 - Math.pow(1 - progress, 3),
+          essential: true,
+        },
+        { geolocateSource: true },
+      );
+    };
+    compassButton?.addEventListener("pointerdown", startCompassHold);
+    window.addEventListener("pointermove", moveCompassHold, true);
+    window.addEventListener("pointerup", endCompassHold, true);
+    window.addEventListener("pointercancel", endCompassHold, true);
+    compassButton?.addEventListener("contextmenu", blockCompassContextMenu);
+    compassButton?.addEventListener("click", toggleFollowPerspective, true);
     map.on("zoomstart", handleZoomStart);
     map.on("zoomend", handleZoomEnd);
     map.on("dragstart", handlePanStart);
@@ -1094,6 +1333,9 @@ export function MapCanvas({
       }
       const accuracy = event.webkitCompassAccuracy;
       const headingConfidence = compassAccuracyConfidence(accuracy);
+      const lowConfidence =
+        Number.isFinite(accuracy) &&
+        (accuracy! < 0 || accuracy! >= LOW_CONFIDENCE_COMPASS_ERROR_DEGREES);
       const button = containerRef.current?.querySelector<HTMLElement>(
         ".maplibregl-ctrl-geolocate",
       );
@@ -1122,9 +1364,14 @@ export function MapCanvas({
       deviceHeadingRef.current = cameraHeading;
       deviceHeadingUpdatedAtRef.current = now;
       deviceHeadingConfidenceRef.current = headingConfidence;
+      syncCompassCalibrationHint(lowConfidence);
       const sensorHeading = Number.isFinite(event.webkitCompassHeading)
         ? event.webkitCompassHeading!
         : event.alpha;
+      if (Number.isFinite(sensorHeading)) {
+        latestRawSensorHeading = sensorHeading!;
+        if (compassRawVisible) syncCompassRawLabel();
+      }
       if (button) {
         button.dataset.rawHeading = heading.toFixed(1);
         button.dataset.compassSensorHeading = Number.isFinite(sensorHeading)
@@ -1145,11 +1392,9 @@ export function MapCanvas({
         button.dataset.compassMovementCorrection =
           corrected.movementCorrection.toFixed(2);
         button.dataset.heading = cameraHeading.toFixed(1);
-        button.dataset.orientation =
-          Number.isFinite(accuracy) &&
-          (accuracy! < 0 || accuracy! >= LOW_CONFIDENCE_COMPASS_ERROR_DEGREES)
-            ? "low-confidence"
-            : "granted";
+        button.dataset.orientation = lowConfidence
+          ? "low-confidence"
+          : "granted";
       }
       if (containerRef.current) {
         containerRef.current.dataset.userHeading = cameraHeading.toFixed(1);
@@ -1450,6 +1695,7 @@ export function MapCanvas({
       };
       const receivedAt = performance.now();
       const smoothedFix = locationSmoother.push(rawFix, receivedAt);
+      const rawLocation: Coordinate = [rawFix.lon, rawFix.lat];
       const location: Coordinate = [smoothedFix.lon, smoothedFix.lat];
       const fixInterval = lastLocationReceivedAt
         ? receivedAt - lastLocationReceivedAt
@@ -1457,27 +1703,78 @@ export function MapCanvas({
       const positionHeading = event.coords.heading;
       const positionSpeed = event.coords.speed;
       const courseAnchor = movementCourseAnchorRef.current;
-      let movementDistance = 0;
       let derivedCourse: number | null = null;
+      let derivedSpeed: number | null = null;
       if (courseAnchor) {
         const meanLatitude =
-          ((courseAnchor[1] + location[1]) / 2) * (Math.PI / 180);
+          ((courseAnchor[1] + rawLocation[1]) / 2) * (Math.PI / 180);
         const eastMeters =
-          (location[0] - courseAnchor[0]) * 111_320 * Math.cos(meanLatitude);
-        const northMeters = (location[1] - courseAnchor[1]) * 111_320;
-        movementDistance = Math.hypot(eastMeters, northMeters);
+          (rawLocation[0] - courseAnchor[0]) * 111_320 * Math.cos(meanLatitude);
+        const northMeters = (rawLocation[1] - courseAnchor[1]) * 111_320;
+        const movementDistance = Math.hypot(eastMeters, northMeters);
         if (movementDistance >= 4) {
-          derivedCourse = bearingDegrees(courseAnchor, location);
-          movementCourseAnchorRef.current = location;
+          derivedCourse = bearingDegrees(courseAnchor, rawLocation);
+          const anchorAt = movementCourseAnchorAtRef.current;
+          derivedSpeed =
+            movementDistance /
+            Math.max(
+              0.5,
+              (receivedAt - (anchorAt ?? receivedAt - fixInterval)) / 1_000,
+            );
+          movementCourseAnchorRef.current = rawLocation;
+          movementCourseAnchorAtRef.current = receivedAt;
         }
       } else {
-        movementCourseAnchorRef.current = location;
+        movementCourseAnchorRef.current = rawLocation;
+        movementCourseAnchorAtRef.current = receivedAt;
       }
+      const measuredSpeed = Number.isFinite(positionSpeed)
+        ? Math.max(0, positionSpeed!)
+        : derivedSpeed;
       const measuredCourse =
-        Number.isFinite(positionHeading) && (positionSpeed ?? 0) >= 0.8
+        Number.isFinite(positionHeading) && (measuredSpeed ?? 0) >= 0.6
           ? normalizeHeading(positionHeading!)
           : derivedCourse;
-      if (measuredCourse !== null) gpsCourseRef.current = measuredCourse;
+      const nativeCourseAvailable =
+        Number.isFinite(positionHeading) && (measuredSpeed ?? 0) >= 0.6;
+      const plausibleMovement =
+        measuredCourse !== null &&
+        measuredSpeed !== null &&
+        measuredSpeed >= 0.6 &&
+        measuredSpeed <= 80;
+      let confirmedCourse: number | null = null;
+      if (plausibleMovement) {
+        const previousCandidate = movementCourseCandidateRef.current;
+        const candidateContinues =
+          previousCandidate !== null &&
+          receivedAt - previousCandidate.updatedAt <= 2_500 &&
+          Math.abs(
+            shortestHeadingDelta(previousCandidate.heading, measuredCourse),
+          ) <= 35;
+        const samples = candidateContinues ? previousCandidate.samples + 1 : 1;
+        movementCourseCandidateRef.current = {
+          heading: measuredCourse,
+          samples,
+          updatedAt: receivedAt,
+        };
+        if (nativeCourseAvailable || samples >= 2) {
+          confirmedCourse = measuredCourse;
+          gpsCourseRef.current = measuredCourse;
+          gpsSpeedRef.current = measuredSpeed;
+          gpsCourseUpdatedAtRef.current = receivedAt;
+        }
+      } else if (
+        (Number.isFinite(positionSpeed) && positionSpeed! < 0.6) ||
+        (derivedSpeed !== null && derivedSpeed > 80)
+      ) {
+        // A stationary native fix or an impossible derived jump breaks the
+        // evidence chain. Never let samples on opposite sides of a GPS
+        // teleport combine into a seemingly confirmed direction of travel.
+        movementCourseCandidateRef.current = null;
+        gpsCourseRef.current = null;
+        gpsSpeedRef.current = 0;
+        gpsCourseUpdatedAtRef.current = 0;
+      }
       const declination = magvar(
         smoothedFix.lat,
         smoothedFix.lon,
@@ -1493,16 +1790,14 @@ export function MapCanvas({
             location,
           );
           if (
-            measuredCourse !== null &&
+            confirmedCourse !== null &&
             (rawFix.accuracy === null || rawFix.accuracy <= 35)
           ) {
             const projectedCourse = trueHeadingToMercatorBearing(
               location,
-              measuredCourse,
+              confirmedCourse,
             );
-            const inferredSpeed = Number.isFinite(positionSpeed)
-              ? Math.max(0, positionSpeed!)
-              : movementDistance / Math.max(0.25, fixInterval / 1_000);
+            const inferredSpeed = measuredSpeed ?? gpsSpeedRef.current ?? 0;
             const locationConfidence =
               rawFix.accuracy === null
                 ? 0.65
@@ -1959,6 +2254,12 @@ export function MapCanvas({
       updateMapTelemetry();
       const center = map.getCenter();
       onCenterChangeRef.current({ lat: center.lat, lon: center.lng });
+      onCameraChangeRef.current({
+        center: [center.lng, center.lat],
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+      });
       const bounds = map.getBounds();
       onBoundsChangeRef.current({
         west: bounds.getWest(),
@@ -1992,9 +2293,25 @@ export function MapCanvas({
       if (surfaceTransitionTimer !== null) {
         window.clearTimeout(surfaceTransitionTimer);
       }
+      finishFollowCameraTransition();
+      clearCompassHold();
+      compassButton?.removeEventListener("pointerdown", startCompassHold);
+      window.removeEventListener("pointermove", moveCompassHold, true);
+      window.removeEventListener("pointerup", endCompassHold, true);
+      window.removeEventListener("pointercancel", endCompassHold, true);
+      compassButton?.removeEventListener(
+        "contextmenu",
+        blockCompassContextMenu,
+      );
+      compassButton?.removeEventListener(
+        "click",
+        toggleFollowPerspective,
+        true,
+      );
       recenterButton.removeEventListener("click", recenterOnUser);
       window.removeEventListener("mapsource:recenter", recenterOnUser);
       recenterButton.remove();
+      compassCalibrationHint.remove();
       panelObserver.disconnect();
       map.off("zoomstart", handleZoomStart);
       map.off("zoomend", handleZoomEnd);
