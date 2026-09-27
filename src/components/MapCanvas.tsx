@@ -27,12 +27,15 @@ import {
 } from "../route-utils";
 import { LocationSmoother } from "../location-smoothing";
 import {
+  compassAccuracyConfidence,
   magneticHeadingToTrue,
   navigationHeading,
+  normalizeHeading,
   orientationHeading,
   shortestHeadingDelta,
   smoothHeading,
   trueHeadingToMercatorBearing,
+  updateMovementHeadingCorrection,
 } from "../orientation";
 import type { InitialMapLocation } from "../initial-map-location";
 import type {
@@ -442,7 +445,7 @@ type CompassOrientationEvent = DeviceOrientationEvent & {
   webkitCompassAccuracy?: number;
 };
 
-const MAX_USABLE_COMPASS_ERROR_DEGREES = 20;
+const LOW_CONFIDENCE_COMPASS_ERROR_DEGREES = 20;
 
 const businessIconPaths: Record<string, string> = {
   cafe: "M6 8h10v5a4 4 0 0 1-4 4h-2a4 4 0 0 1-4-4V8Zm10 2h1a2 2 0 0 1 0 4h-1M9 4v2m4-2v2",
@@ -609,9 +612,13 @@ export function MapCanvas({
   const initialLocationAppliedRef = useRef(false);
   const deviceHeadingRef = useRef<number | null>(null);
   const deviceHeadingUpdatedAtRef = useRef(0);
+  const deviceHeadingConfidenceRef = useRef(0.7);
   const rawDeviceHeadingRef = useRef<number | null>(null);
   const deviceHeadingMagneticRef = useRef(false);
   const magneticDeclinationRef = useRef(0);
+  const movementHeadingCorrectionRef = useRef(0);
+  const movementHeadingResidualRef = useRef<number | null>(null);
+  const movementCourseAnchorRef = useRef<Coordinate | null>(null);
   const gpsCourseRef = useRef<number | null>(null);
   const latestUserLocationRef = useRef<Coordinate | null>(null);
   const loadedSurfaceRef = useRef(surface);
@@ -1054,16 +1061,21 @@ export function MapCanvas({
       const trueHeading = isMagneticHeading
         ? magneticHeadingToTrue(heading, magneticDeclinationRef.current)
         : heading;
-      const projectedHeading = location
+      const uncalibratedProjectedHeading = location
         ? trueHeadingToMercatorBearing(location, trueHeading)
         : trueHeading;
+      const projectedHeading = normalizeHeading(
+        uncalibratedProjectedHeading + movementHeadingCorrectionRef.current,
+      );
       return {
         trueHeading,
+        uncalibratedProjectedHeading,
         projectedHeading,
         projectionCorrection: shortestHeadingDelta(
           trueHeading,
-          projectedHeading,
+          uncalibratedProjectedHeading,
         ),
+        movementCorrection: movementHeadingCorrectionRef.current,
       };
     };
     const orientationListener = (rawEvent: Event) => {
@@ -1073,17 +1085,20 @@ export function MapCanvas({
       // the calibrated WebKit compass is present, an arbitrary/independent
       // alpha stream must not overwrite it a few milliseconds later.
       if (orientationSource === "webkit-compass" && !isMagneticHeading) return;
-      if (isMagneticHeading) orientationSource = "webkit-compass";
+      if (isMagneticHeading && orientationSource !== "webkit-compass") {
+        // A correction learned against an alpha reference cannot be carried
+        // into WebKit's independent magnetic compass frame.
+        movementHeadingCorrectionRef.current = 0;
+        movementHeadingResidualRef.current = null;
+        orientationSource = "webkit-compass";
+      }
       const accuracy = event.webkitCompassAccuracy;
+      const headingConfidence = compassAccuracyConfidence(accuracy);
       const button = containerRef.current?.querySelector<HTMLElement>(
         ".maplibregl-ctrl-geolocate",
       );
       if (Number.isFinite(accuracy)) {
         if (button) button.dataset.compassAccuracy = accuracy!.toFixed(0);
-        if (accuracy! < 0 || accuracy! >= MAX_USABLE_COMPASS_ERROR_DEGREES) {
-          if (button) button.dataset.orientation = "calibrate";
-          return;
-        }
       }
       const legacyOrientation = (window as Window & { orientation?: number })
         .orientation;
@@ -1100,11 +1115,13 @@ export function MapCanvas({
         deviceHeadingUpdatedAtRef.current
           ? now - deviceHeadingUpdatedAtRef.current
           : 1_000,
+        headingConfidence,
       );
       rawDeviceHeadingRef.current = heading;
       deviceHeadingMagneticRef.current = isMagneticHeading;
       deviceHeadingRef.current = cameraHeading;
       deviceHeadingUpdatedAtRef.current = now;
+      deviceHeadingConfidenceRef.current = headingConfidence;
       const sensorHeading = Number.isFinite(event.webkitCompassHeading)
         ? event.webkitCompassHeading!
         : event.alpha;
@@ -1124,8 +1141,15 @@ export function MapCanvas({
         button.dataset.compassProjectedHeading =
           corrected.projectedHeading.toFixed(1);
         button.dataset.compassSmoothedHeading = cameraHeading.toFixed(1);
+        button.dataset.compassConfidence = headingConfidence.toFixed(3);
+        button.dataset.compassMovementCorrection =
+          corrected.movementCorrection.toFixed(2);
         button.dataset.heading = cameraHeading.toFixed(1);
-        button.dataset.orientation = "granted";
+        button.dataset.orientation =
+          Number.isFinite(accuracy) &&
+          (accuracy! < 0 || accuracy! >= LOW_CONFIDENCE_COMPASS_ERROR_DEGREES)
+            ? "low-confidence"
+            : "granted";
       }
       if (containerRef.current) {
         containerRef.current.dataset.userHeading = cameraHeading.toFixed(1);
@@ -1148,6 +1172,10 @@ export function MapCanvas({
           corrected.projectedHeading.toFixed(1);
         containerRef.current.dataset.compassSmoothedHeading =
           cameraHeading.toFixed(1);
+        containerRef.current.dataset.compassConfidence =
+          headingConfidence.toFixed(3);
+        containerRef.current.dataset.compassMovementCorrection =
+          corrected.movementCorrection.toFixed(2);
         containerRef.current.dataset.compassCameraHeading =
           cameraHeading.toFixed(1);
       }
@@ -1423,6 +1451,33 @@ export function MapCanvas({
       const receivedAt = performance.now();
       const smoothedFix = locationSmoother.push(rawFix, receivedAt);
       const location: Coordinate = [smoothedFix.lon, smoothedFix.lat];
+      const fixInterval = lastLocationReceivedAt
+        ? receivedAt - lastLocationReceivedAt
+        : 700;
+      const positionHeading = event.coords.heading;
+      const positionSpeed = event.coords.speed;
+      const courseAnchor = movementCourseAnchorRef.current;
+      let movementDistance = 0;
+      let derivedCourse: number | null = null;
+      if (courseAnchor) {
+        const meanLatitude =
+          ((courseAnchor[1] + location[1]) / 2) * (Math.PI / 180);
+        const eastMeters =
+          (location[0] - courseAnchor[0]) * 111_320 * Math.cos(meanLatitude);
+        const northMeters = (location[1] - courseAnchor[1]) * 111_320;
+        movementDistance = Math.hypot(eastMeters, northMeters);
+        if (movementDistance >= 4) {
+          derivedCourse = bearingDegrees(courseAnchor, location);
+          movementCourseAnchorRef.current = location;
+        }
+      } else {
+        movementCourseAnchorRef.current = location;
+      }
+      const measuredCourse =
+        Number.isFinite(positionHeading) && (positionSpeed ?? 0) >= 0.8
+          ? normalizeHeading(positionHeading!)
+          : derivedCourse;
+      if (measuredCourse !== null) gpsCourseRef.current = measuredCourse;
       const declination = magvar(
         smoothedFix.lat,
         smoothedFix.lon,
@@ -1431,15 +1486,53 @@ export function MapCanvas({
       );
       if (Number.isFinite(declination)) {
         magneticDeclinationRef.current = declination;
-        if (
-          deviceHeadingMagneticRef.current &&
-          rawDeviceHeadingRef.current !== null
-        ) {
-          const corrected = correctHeadingForMap(
+        if (rawDeviceHeadingRef.current !== null) {
+          let corrected = correctHeadingForMap(
             rawDeviceHeadingRef.current,
-            true,
+            deviceHeadingMagneticRef.current,
             location,
           );
+          if (
+            measuredCourse !== null &&
+            (rawFix.accuracy === null || rawFix.accuracy <= 35)
+          ) {
+            const projectedCourse = trueHeadingToMercatorBearing(
+              location,
+              measuredCourse,
+            );
+            const inferredSpeed = Number.isFinite(positionSpeed)
+              ? Math.max(0, positionSpeed!)
+              : movementDistance / Math.max(0.25, fixInterval / 1_000);
+            const locationConfidence =
+              rawFix.accuracy === null
+                ? 0.65
+                : Math.max(0.25, 1 - rawFix.accuracy / 50);
+            const gain =
+              (0.08 + Math.min(0.2, inferredSpeed * 0.055)) *
+              locationConfidence;
+            const calibration = updateMovementHeadingCorrection(
+              movementHeadingCorrectionRef.current,
+              movementHeadingResidualRef.current,
+              corrected.uncalibratedProjectedHeading,
+              projectedCourse,
+              gain,
+            );
+            if (calibration.applied) {
+              movementHeadingCorrectionRef.current = calibration.correction;
+              corrected = correctHeadingForMap(
+                rawDeviceHeadingRef.current,
+                deviceHeadingMagneticRef.current,
+                location,
+              );
+            }
+            movementHeadingResidualRef.current = calibration.residual;
+            if (containerRef.current) {
+              containerRef.current.dataset.compassMovementResidual =
+                calibration.residual.toFixed(2);
+              containerRef.current.dataset.compassMovementCourse =
+                projectedCourse.toFixed(1);
+            }
+          }
           const now = performance.now();
           const smoothedHeading = smoothHeading(
             deviceHeadingRef.current,
@@ -1447,6 +1540,7 @@ export function MapCanvas({
             deviceHeadingUpdatedAtRef.current
               ? now - deviceHeadingUpdatedAtRef.current
               : 1_000,
+            deviceHeadingConfidenceRef.current,
           );
           deviceHeadingRef.current = smoothedHeading;
           deviceHeadingUpdatedAtRef.current = now;
@@ -1459,24 +1553,17 @@ export function MapCanvas({
               corrected.projectedHeading.toFixed(1);
             containerRef.current.dataset.compassSmoothedHeading =
               smoothedHeading.toFixed(1);
+            containerRef.current.dataset.compassMovementCorrection =
+              corrected.movementCorrection.toFixed(2);
           }
+          geolocateButton.dataset.compassMovementCorrection =
+            corrected.movementCorrection.toFixed(2);
         }
         if (containerRef.current) {
           containerRef.current.dataset.compassDeclination =
             declination.toFixed(2);
         }
         geolocateButton.dataset.compassDeclination = declination.toFixed(2);
-      }
-      const previous = latestUserLocationRef.current;
-      if (previous) {
-        const meanLatitude =
-          ((previous[1] + location[1]) / 2) * (Math.PI / 180);
-        const eastMeters =
-          (location[0] - previous[0]) * 111_320 * Math.cos(meanLatitude);
-        const northMeters = (location[1] - previous[1]) * 111_320;
-        if (Math.hypot(eastMeters, northMeters) >= 4) {
-          gpsCourseRef.current = bearingDegrees(previous, location);
-        }
       }
       latestUserLocationRef.current = location;
       userTrackingRef.current = true;
@@ -1498,13 +1585,8 @@ export function MapCanvas({
           smoothedFix.sampleCount,
         );
       }
-      const fixInterval = lastLocationReceivedAt
-        ? receivedAt - lastLocationReceivedAt
-        : 700;
       moveUserLocationMarker(location, receivedAt, smoothedFix.reset);
       onUserLocationRef.current(smoothedFix);
-      const positionHeading = event.coords.heading;
-      const positionSpeed = event.coords.speed;
       const cameraDuration = smoothedFix.reset
         ? 220
         : Math.max(280, Math.min(1_000, fixInterval * 0.9));

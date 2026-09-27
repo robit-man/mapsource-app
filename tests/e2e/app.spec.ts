@@ -684,6 +684,9 @@ test("requests orientation with location and follows an absolute heading", async
     );
     await expect(page.locator(".smoothed-user-location")).toBeVisible();
   }
+  const headingBeforeLowConfidence = Number(
+    await locate.getAttribute("data-heading"),
+  );
   await page.evaluate(() => {
     const inaccurate = new Event("deviceorientationabsolute");
     Object.defineProperties(inaccurate, {
@@ -693,16 +696,27 @@ test("requests orientation with location and follows an absolute heading", async
     });
     window.dispatchEvent(inaccurate);
   });
-  await expect(locate).toHaveAttribute("data-orientation", "calibrate");
-  await expect(locate).toHaveAttribute("data-heading", "90.0");
-  await page.evaluate(() => {
-    const accurate = new Event("deviceorientationabsolute");
-    Object.defineProperties(accurate, {
-      absolute: { value: true },
-      webkitCompassAccuracy: { value: 5 },
-      webkitCompassHeading: { value: 100 },
-    });
-    window.dispatchEvent(accurate);
+  await expect(locate).toHaveAttribute("data-orientation", "low-confidence");
+  const lowConfidenceHeading = Number(
+    await locate.getAttribute("data-heading"),
+  );
+  expect(lowConfidenceHeading).toBeGreaterThan(headingBeforeLowConfidence + 5);
+  expect(
+    Number(await locate.getAttribute("data-compass-confidence")),
+  ).toBeLessThan(0.2);
+  await page.evaluate(async () => {
+    for (let sample = 0; sample < 24; sample += 1) {
+      const accurate = new Event("deviceorientationabsolute");
+      Object.defineProperties(accurate, {
+        absolute: { value: true },
+        webkitCompassAccuracy: { value: 5 },
+        webkitCompassHeading: { value: 100 },
+      });
+      window.dispatchEvent(accurate);
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => resolve()),
+      );
+    }
   });
   await expect(locate).toHaveAttribute("data-orientation", "granted");
   const declination = Number(
@@ -753,6 +767,26 @@ test("requests orientation with location and follows an absolute heading", async
   await expect
     .poll(async () => Number(await locate.getAttribute("data-heading")))
     .toBeCloseTo(trueHeading, 1);
+  const [movementLongitude, movementLatitude] = (
+    (await page
+      .locator(".map-canvas")
+      .getAttribute("data-user-location-raw")) ?? "-122.716,45.531"
+  )
+    .split(",")
+    .map(Number);
+  for (let sample = 1; sample <= 8; sample += 1) {
+    await context.setGeolocation({
+      latitude: movementLatitude!,
+      longitude: movementLongitude! + sample * 0.00012,
+      accuracy: 8,
+    });
+    await page.waitForTimeout(120);
+  }
+  await expect
+    .poll(async () =>
+      Number(await locate.getAttribute("data-compass-movement-correction")),
+    )
+    .toBeLessThan(-10);
   await page.getByRole("button", { name: "Current location" }).click();
   await expect(page.getByLabel("Stop 1")).toHaveValue("Current location");
   await expect(

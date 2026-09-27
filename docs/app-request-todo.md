@@ -194,7 +194,7 @@ location` origin actions; destination shows `Select on map or search`.
 - [x] APP-075 Request geolocation and orientation/compass access together when
       the location control is activated.
 - [x] APP-076 Use absolute, screen-compensated, tilt-aware heading with circular
-      smoothing, accuracy rejection, moving GPS course, and route-bearing fallback.
+      accuracy-weighted smoothing, moving GPS course, and route-bearing fallback.
 - [ ] APP-077 Validate compass calibration and orientation on real iOS and
       Android hardware under the deployed HTTPS origin.
 - [x] APP-078 With the sheet half open, center tracked location at the center of
@@ -259,6 +259,10 @@ location` origin actions; destination shows `Select on map or search`.
       keep the sensor source deterministic, convert geodetic true heading into
       the active map projection at the live location, and restore circular
       smoothing after all reference-frame corrections rather than before them.
+      Never hard-reject a finite heading based on its reported accuracy: every
+      compass update must move the scene at a confidence-weighted rate, while
+      sustained natural movement gradually self-corrects compass bias against
+      the measured true course without a fixed offset.
 - [x] APP-094 Make place search region-aware: rank useful matches in and near
       the map's current/derived user region ahead of same-name results from
       distant countries, while retaining a deliberate path to globally search

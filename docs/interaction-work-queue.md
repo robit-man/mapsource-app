@@ -248,7 +248,8 @@ or search`.
       lock to one deterministic sensor source, and smooth only the final
       corrected bearing.
 - [x] Use tilt-compensated absolute orientation, screen rotation compensation,
-      circular smoothing, poor-accuracy rejection, GPS course while moving, and
+      accuracy-weighted circular smoothing without a hard compass cutoff, GPS
+      course while moving, bounded movement-derived self-correction, and
       nearest-route bearing fallback.
 - [ ] Verify heading and calibration behavior on a real mobile sensor in the
       deployed HTTPS application; browser simulation is necessary but not

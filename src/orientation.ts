@@ -72,16 +72,48 @@ export function shortestHeadingDelta(from: number, to: number) {
   return ((to - from + 540) % 360) - 180;
 }
 
+/** Convert the platform's approximate ±degree error into a continuous filter
+ * confidence. Even an uncalibrated WebKit sample contributes at low weight; it
+ * is never treated as a binary valid/invalid switch. */
+export function compassAccuracyConfidence(accuracy?: number | null) {
+  if (!Number.isFinite(accuracy)) return 0.7;
+  if (accuracy! < 0) return 0.08;
+  return Math.max(0.12, 1 / (1 + Math.pow(accuracy! / 12, 2)));
+}
+
+export function updateMovementHeadingCorrection(
+  currentCorrection: number,
+  previousResidual: number | null,
+  sensorHeading: number,
+  courseHeading: number,
+  gain: number,
+) {
+  const residual = shortestHeadingDelta(sensorHeading, courseHeading);
+  const consistent =
+    previousResidual === null ||
+    Math.abs(shortestHeadingDelta(previousResidual, residual)) <= 12;
+  if (Math.abs(residual) > 60 || !consistent) {
+    return { correction: currentCorrection, residual, applied: false };
+  }
+  const targetCorrection = Math.max(-45, Math.min(45, residual));
+  const correction =
+    currentCorrection +
+    (targetCorrection - currentCorrection) * Math.max(0, Math.min(0.35, gain));
+  return { correction, residual, applied: true };
+}
+
 export function smoothHeading(
   previous: number | null,
   next: number,
   elapsedMs: number,
+  confidence = 1,
 ) {
   if (previous === null) return normalizeHeading(next);
   const delta = shortestHeadingDelta(previous, next);
   const timeWeight = 1 - Math.exp(-Math.max(8, elapsedMs) / 130);
   const turnWeight = Math.min(0.52, Math.abs(delta) / 180);
-  const weight = Math.min(1, timeWeight + turnWeight);
+  const confidenceWeight = 0.18 + 0.82 * Math.max(0, Math.min(1, confidence));
+  const weight = Math.min(1, (timeWeight + turnWeight) * confidenceWeight);
   return normalizeHeading(previous + delta * weight);
 }
 
