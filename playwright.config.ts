@@ -15,13 +15,13 @@ const e2eOrigin = `http://127.0.0.1:${e2ePort}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  timeout: 45_000,
-  expect: { timeout: 8_000 },
+  timeout: process.env.CI ? 90_000 : 45_000,
+  expect: { timeout: process.env.CI ? 15_000 : 8_000 },
   fullyParallel: true,
-  // Every project creates a WebGL map. GitHub's two-core runners cannot keep
-  // six maps responsive at once, so keep CI at one context per core while
-  // retaining the faster local cap on the deployment host.
-  workers: process.env.CI ? 2 : 6,
+  // Every project creates a WebGL map. Hosted runners expose two cores but
+  // throttle software WebGL enough that concurrent maps miss interaction
+  // frames. Keep CI serial and retain the faster local stress-test cap.
+  workers: process.env.CI ? 1 : 6,
   forbidOnly: true,
   retries: 0,
   reporter: [["list"], ["html", { open: "never" }]],
