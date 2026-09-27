@@ -324,7 +324,7 @@ test.beforeEach(async ({ page }) => {
   await expect(
     await page.request.get("/assets/maplibre-gl-shared.mjs"),
   ).toBeOK();
-  await expect(page.getByRole("heading", { name: "Hike" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Walk" })).toBeVisible();
   await expect(page.locator(".stop-row")).toHaveCount(0);
   await expect(page.getByText("Plan", { exact: true })).toBeVisible();
   await expect(
@@ -401,7 +401,47 @@ test("requests orientation with location and follows an absolute heading", async
           .getAttribute("data-user-focus-target")) ?? "0,0"
       ).split(",")[1],
     );
-    expect(targetY).toBeLessThan((page.viewportSize()?.height ?? 800) / 3);
+    const panelBox = await page
+      .getByRole("complementary", { name: "Route planner" })
+      .boundingBox();
+    expect(panelBox).not.toBeNull();
+    expect(targetY).toBeCloseTo(
+      ((page.viewportSize()?.height ?? 800) - panelBox!.height) / 2,
+      0,
+    );
+
+    const zoomValue = async () =>
+      Number(
+        (
+          (await page.locator(".map-canvas").getAttribute("data-camera")) ??
+          "0,0,0"
+        ).split(",")[2],
+      );
+    const zoomBefore = await zoomValue();
+    const zoomOut = page.locator(".maplibregl-ctrl-zoom-out");
+    for (let index = 0; index < 3; index += 1) {
+      await zoomOut.click();
+      await page.waitForTimeout(340);
+    }
+    await expect.poll(zoomValue).toBeLessThan(zoomBefore - 2.5);
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-user-tracking",
+      "active",
+    );
+    await page.evaluate(() => {
+      const orientation = new Event("deviceorientationabsolute");
+      Object.defineProperties(orientation, {
+        absolute: { value: true },
+        alpha: { value: 270 },
+      });
+      window.dispatchEvent(orientation);
+    });
+    await page.waitForTimeout(260);
+    await expect.poll(zoomValue).toBeLessThan(zoomBefore - 2.5);
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-user-focus-error",
+      /^(0|1)(\.\d+)?$/,
+    );
   }
   await page.evaluate(() => {
     const inaccurate = new Event("deviceorientationabsolute");
@@ -433,7 +473,7 @@ test("requests orientation with location and follows an absolute heading", async
   expect(routeRequestsByPage.get(page)).toBe(0);
 });
 
-test("plans, searches, layers, and replays a hike", async ({
+test("plans, searches, layers, and replays a walk", async ({
   page,
   isMobile,
 }) => {
@@ -552,6 +592,42 @@ test("discovers visible businesses and exposes available actions", async ({
   ).toHaveAttribute("href", "https://www.openstreetmap.org/node/101");
 });
 
+test("uses an actively tracked location when navigating to a selected place", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["geolocation"], {
+    origin: new URL(page.url()).origin,
+  });
+  await context.setGeolocation({
+    latitude: 45.53616,
+    longitude: -122.71256,
+    accuracy: 8,
+  });
+  await page.getByRole("button", { name: "Find my location" }).click();
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-user-tracking",
+    "active",
+  );
+
+  const canvas = page.locator(".maplibregl-canvas");
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + box!.width * 0.48, box!.y + 150);
+  await page.mouse.down();
+  await page.waitForTimeout(600);
+  await page.mouse.up();
+  const details = page.getByLabel("Selected place details");
+  await expect(details).toBeVisible();
+  await details.getByRole("button", { name: "Navigate", exact: true }).click();
+  await expect(page.locator(".stop-row")).toHaveCount(2);
+  await expect(page.getByLabel("Stop 1")).toHaveValue("Current location");
+  await expect(page.getByLabel("Stop 2")).toHaveValue("Trail House Cafe");
+  await expect(
+    page.locator('.empty-stop-row[data-route-role="origin"]'),
+  ).toHaveCount(0);
+});
+
 test("keeps attribution circular closed and a rounded box open", async ({
   page,
 }) => {
@@ -576,15 +652,7 @@ test("switches every planner family and inserts or reorders route stops", async 
   await seedRoute(page);
   const modeSwitchBox = await page.locator(".mode-switch").boundingBox();
   expect(modeSwitchBox).not.toBeNull();
-  for (const label of [
-    "Hike",
-    "Walk",
-    "Run",
-    "Bike",
-    "Car",
-    "Transit",
-    "Train",
-  ]) {
+  for (const label of ["Walk", "Bike", "Car", "Bus", "Train"]) {
     const buttonBox = await page
       .getByRole("button", { name: label })
       .boundingBox();
@@ -598,13 +666,25 @@ test("switches every planner family and inserts or reorders route stops", async 
   await expect(page.getByRole("heading", { name: "Car" })).toBeVisible();
   await expect(page.getByText("Road overview")).toBeVisible();
 
-  await page.getByRole("button", { name: "Transit" }).click();
-  await expect(page.getByRole("heading", { name: "Transit" })).toBeVisible();
-  await expect(page.getByText("Transit network route")).toBeVisible();
+  const busStops = page.waitForRequest((request) =>
+    request.url().includes("category=transit_stop"),
+  );
+  await page.getByRole("button", { name: "Bus" }).click();
+  await busStops;
+  await expect(page.getByRole("heading", { name: "Bus" })).toBeVisible();
+  await expect(page.getByText("Bus-stop network route")).toBeVisible();
+  await expect(page.getByText(/mapped OpenStreetMap bus stops/)).toBeVisible();
 
+  const railStations = page.waitForRequest((request) =>
+    request.url().includes("category=railway_station"),
+  );
   await page.getByRole("button", { name: "Train" }).click();
+  await railStations;
   await expect(page.getByRole("heading", { name: "Train" })).toBeVisible();
-  await expect(page.getByText("Rail connection preview")).toBeVisible();
+  await expect(page.getByText("Rail and light-rail connection")).toBeVisible();
+  await expect(
+    page.getByText(/railway tracks, stations, and light-rail stations/),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: /Add stop between/ }).click();
   await expect(page.locator(".stop-row")).toHaveCount(3);
@@ -682,13 +762,26 @@ test("keeps every travel mode directly selectable on mobile", async ({
     (page.viewportSize()?.height ?? 800) * 0.45,
   );
   for (const [label, heading] of [
+    ["Walk", "Walk"],
+    ["Bike", "Bike"],
     ["Car", "Car"],
-    ["Transit", "Transit"],
+    ["Bus", "Bus"],
     ["Train", "Train"],
   ] as const) {
     const button = page.getByRole("button", { name: label });
     await expect(button).toBeVisible();
+    const transportRequest =
+      label === "Bus" || label === "Train"
+        ? page.waitForRequest((request) =>
+            request
+              .url()
+              .includes(
+                `category=${label === "Bus" ? "transit_stop" : "railway_station"}`,
+              ),
+          )
+        : null;
     await button.click();
+    await transportRequest;
     await expect(page.getByRole("heading", { name: heading })).toBeVisible();
   }
 });
@@ -977,9 +1070,15 @@ test("opens map-hold actions and routes inspected places through the sheet", asy
   await expect(page.locator(".stop-row")).toHaveCount(3);
 
   page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "Navigate to map point" }).click();
-  await expect(page.locator(".stop-row")).toHaveCount(2);
-  await expect(page.getByLabel("Stop 2")).toHaveValue("Trail House Cafe");
+  await details.getByRole("button", { name: "Navigate", exact: true }).click();
+  await expect(
+    page.getByRole("complementary", { name: "Route planner" }),
+  ).toHaveAttribute("data-sheet-mode", "half");
+  await expect(page.locator(".stop-row")).toHaveCount(1);
+  await expect(page.getByLabel("Stop 1")).toHaveValue("Trail House Cafe");
+  await expect(
+    page.locator('.empty-stop-row[data-route-role="origin"]'),
+  ).toHaveClass(/is-selecting/);
 });
 
 test("keeps the mobile route sheet and move controls usable", async ({

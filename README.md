@@ -7,7 +7,7 @@ The live deployment is available at [`app.mapsource.io`](https://app.mapsource.i
 ## What the example includes
 
 - Mapsource vector cartography, glyphs, terrain tiles, local place search, pedestrian/bicycle routing, maneuvers, and route elevation.
-- Hike, walk, run, bicycle, car, public-transport, and train planning with 2–10 ordered stops. Transit views clearly distinguish network previews from live schedules.
+- Walk, bicycle, car, bus, and train planning with 2–10 ordered stops. Bus views reference mapped bus stops; train views reference mapped railway tracks, stations, and light-rail stations while distinguishing network previews from live schedules.
 - Draggable map stops, tap-to-reposition mode, editable stop names, inline local search for inserted stops, and elastic route-stop reordering with live A/#/B relabeling.
 - Route replay with progress, heading-following camera, 1×/2×/4× speed, and a hydrated traveled path.
 - Elevation gain, loss, high point, profile, distance, duration, and turn-by-turn directions.

@@ -85,14 +85,7 @@ export type RouteResponse = {
   };
 };
 
-export type RouteMode =
-  | "hike"
-  | "walk"
-  | "run"
-  | "bike"
-  | "car"
-  | "transit"
-  | "train";
+export type RouteMode = "walk" | "bike" | "car" | "bus" | "train";
 
 export type MapSurface =
   | "mapsource"

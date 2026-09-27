@@ -35,6 +35,9 @@ for (const [surface, expectedName] of Object.entries({
   if (!style?.layers?.some((layer) => layer.id === "mapsource.hillshade")) {
     throw new Error(`${path} omitted the hillshade layer`);
   }
+  if (!style?.layers?.some((layer) => layer.id === "transit.rail")) {
+    throw new Error(`${path} omitted the rail/light-rail network layer`);
+  }
   process.stdout.write(`${path} ${response.status} ${style.name}\n`);
 }
 
@@ -55,7 +58,24 @@ for (const imagePath of [
   process.stdout.write(`${imagePath} ${response.status} ${bytes} bytes\n`);
 }
 
-for (const mode of ["hike", "walk", "run", "bike", "car", "transit", "train"]) {
+for (const category of ["transit_stop", "railway_station"]) {
+  const query = `category=${category}&lat=45.5231&lon=-122.6765&west=-122.74&south=45.49&east=-122.62&north=45.56`;
+  const response = await fetch(`${origin}/api/discover?${query}`, {
+    signal: AbortSignal.timeout(25_000),
+  });
+  if (!response.ok) {
+    throw new Error(`/api/discover (${category}) returned ${response.status}`);
+  }
+  const body = await response.json();
+  if (!Array.isArray(body?.places) || body.places.length === 0) {
+    throw new Error(`/api/discover (${category}) returned no mapped features`);
+  }
+  process.stdout.write(
+    `/api/discover ${category} ${response.status} ${body.places.length} mapped features\n`,
+  );
+}
+
+for (const mode of ["walk", "bike", "car", "bus", "train"]) {
   const routeStarted = performance.now();
   const routeResponse = await fetch(`${origin}/api/route`, {
     method: "POST",

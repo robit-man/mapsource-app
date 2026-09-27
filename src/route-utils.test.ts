@@ -36,7 +36,7 @@ describe("route utilities", () => {
     expect(nearestRouteBearing([], [-121.4, 45.001])).toBeNull();
   });
 
-  it("formats hike metrics and elevation paths", () => {
+  it("formats walk metrics and elevation paths", () => {
     expect(formatDistance(0.42)).toBe("420 m");
     expect(formatDuration(5_400)).toBe("1 hr 30 min");
     expect(elevationPath([10, 20, 15])).toContain("L160.00,0.00");

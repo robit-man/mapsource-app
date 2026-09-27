@@ -29,6 +29,7 @@ import type {
   Coordinate,
   DiscoveryPlace,
   MapSurface,
+  RouteMode,
   RouteResponse,
   ViewBounds,
   Waypoint,
@@ -40,6 +41,7 @@ type MapCanvasProps = {
   waypoints: Waypoint[];
   route: RouteResponse | null;
   heldPointDetails: { title: string; detail?: string } | null;
+  mode: RouteMode;
   selectedWaypointId: string | null;
   onWaypointMove: (
     id: string,
@@ -57,6 +59,7 @@ type MapCanvasProps = {
     userLocation: { lat: number; lon: number } | null,
   ) => void;
   onUserLocation: (coordinate: { lat: number; lon: number }) => void;
+  onUserTrackingChange: (active: boolean) => void;
   onCenterChange: (coordinate: { lat: number; lon: number }) => void;
   surface: MapSurface;
   replayProgress: number;
@@ -394,7 +397,7 @@ function visibleMapFocusTarget(map: MapLibreMap) {
   let x = width / 2;
   let y = height / 2;
   if (window.innerWidth <= 760) {
-    const panelHeight = panel?.getBoundingClientRect().height ?? 154;
+    const panelHeight = panel?.getBoundingClientRect().height ?? 202;
     const sheetMode = panel?.dataset.sheetMode ?? "half";
     y =
       sheetMode === "minimized"
@@ -407,6 +410,20 @@ function visibleMapFocusTarget(map: MapLibreMap) {
     x,
     y,
     offset: [x - width / 2, y - height / 2] as [number, number],
+  };
+}
+
+function focusTargetPadding(
+  map: MapLibreMap,
+  target: { x: number; y: number },
+) {
+  const width = map.getContainer().clientWidth;
+  const height = map.getContainer().clientHeight;
+  return {
+    top: Math.max(0, target.y * 2 - height),
+    right: Math.max(0, width - target.x * 2),
+    bottom: Math.max(0, height - target.y * 2),
+    left: Math.max(0, target.x * 2 - width),
   };
 }
 
@@ -476,6 +493,10 @@ const businessIconPaths: Record<string, string> = {
   fuel: "M5 3h10v18H5V3Zm3 4h4m3 2h2l2 2v6a2 2 0 0 0 2 2V9",
   hotel: "M4 19V6m0 9h16v4M7 11h4a3 3 0 0 1 3 3v1",
   park: "m12 3-5 8h3l-4 6h12l-4-6h3l-5-8Zm0 14v4",
+  transit_stop:
+    "M6 3h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm1 4h10v6H7V7Zm1 9h2m4 0h2M7 19v2m10-2v2",
+  railway_station:
+    "M8 3h8a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3Zm0 4h8v5H8V7Zm1 9h.01M15 16h.01M9 19l-2 3m8-3 2 3",
 };
 
 const intermediateIconPaths = {
@@ -579,6 +600,7 @@ export function MapCanvas({
   waypoints,
   route,
   heldPointDetails,
+  mode,
   selectedWaypointId,
   onWaypointMove,
   onMapPick,
@@ -586,6 +608,7 @@ export function MapCanvas({
   onInspectPoint,
   onNavigatePoint,
   onUserLocation,
+  onUserTrackingChange,
   onCenterChange,
   surface,
   replayProgress,
@@ -608,9 +631,11 @@ export function MapCanvas({
   const onInspectPointRef = useRef(onInspectPoint);
   const onNavigatePointRef = useRef(onNavigatePoint);
   const onUserLocationRef = useRef(onUserLocation);
+  const onUserTrackingChangeRef = useRef(onUserTrackingChange);
   const onCenterChangeRef = useRef(onCenterChange);
   const onBoundsChangeRef = useRef(onBoundsChange);
   const surfaceRef = useRef(surface);
+  const modeRef = useRef(mode);
   const routeRef = useRef(route);
   const waypointsRef = useRef(waypoints);
   const replayProgressRef = useRef(replayProgress);
@@ -637,9 +662,11 @@ export function MapCanvas({
     onInspectPointRef.current = onInspectPoint;
     onNavigatePointRef.current = onNavigatePoint;
     onUserLocationRef.current = onUserLocation;
+    onUserTrackingChangeRef.current = onUserTrackingChange;
     onCenterChangeRef.current = onCenterChange;
     onBoundsChangeRef.current = onBoundsChange;
     surfaceRef.current = surface;
+    modeRef.current = mode;
     routeRef.current = route;
     waypointsRef.current = waypoints;
     replayProgressRef.current = replayProgress;
@@ -652,6 +679,8 @@ export function MapCanvas({
     onMapPick,
     onNavigatePoint,
     onUserLocation,
+    onUserTrackingChange,
+    mode,
     replayProgress,
     replaying,
     route,
@@ -697,6 +726,21 @@ export function MapCanvas({
     map.addControl(geolocate, "bottom-right");
     let attributionAdded = false;
     let userFocusSequence = 0;
+    let userZooming = false;
+    let trackingBeforeUserZoom = false;
+    let hasInitialUserFocus = false;
+    let zoomFocusFrame: number | null = null;
+    let panelFocusFrame: number | null = null;
+
+    const updateGeolocateCameraContract = (preserveZoom: boolean) => {
+      const target = visibleMapFocusTarget(map);
+      geolocate.options.fitBoundsOptions = {
+        ...geolocate.options.fitBoundsOptions,
+        padding: focusTargetPadding(map, target),
+        ...(preserveZoom ? { maxZoom: map.getZoom() } : {}),
+      };
+    };
+    updateGeolocateCameraContract(false);
 
     const updateMapTelemetry = () => {
       const container = containerRef.current;
@@ -716,7 +760,8 @@ export function MapCanvas({
       positionHeading?: number | null,
       positionSpeed?: number | null,
     ) => {
-      if (!userTrackingRef.current || replayingRef.current) return;
+      if (!userTrackingRef.current || replayingRef.current || userZooming)
+        return;
       const routeBearing = nearestRouteBearing(
         routeCoordinates(routeRef.current),
         location,
@@ -730,6 +775,8 @@ export function MapCanvas({
         routeBearing ??
         map.getBearing();
       const target = visibleMapFocusTarget(map);
+      hasInitialUserFocus = true;
+      updateGeolocateCameraContract(true);
       const focusSequence = ++userFocusSequence;
       if (containerRef.current) {
         containerRef.current.dataset.userFocusTarget = [
@@ -773,9 +820,9 @@ export function MapCanvas({
       map.easeTo(
         {
           center: location,
+          offset: target.offset,
           bearing: heading,
           pitch: routeRef.current ? 54 : 42,
-          zoom: Math.max(routeRef.current ? 15 : 14, map.getZoom()),
           duration: 180,
           essential: true,
         },
@@ -785,6 +832,68 @@ export function MapCanvas({
         containerRef.current.dataset.cameraBearing = heading.toFixed(1);
       }
     };
+
+    const refocusTrackedUser = () => {
+      const location = latestUserLocationRef.current;
+      if (location) orientToUser(location);
+    };
+
+    const handleZoomStart = (event: { originalEvent?: unknown }) => {
+      if (!event.originalEvent) return;
+      trackingBeforeUserZoom = userTrackingRef.current;
+      userZooming = true;
+      userFocusSequence += 1;
+      if (zoomFocusFrame !== null) {
+        window.cancelAnimationFrame(zoomFocusFrame);
+        zoomFocusFrame = null;
+      }
+    };
+    const handleZoom = () => {
+      if (!userZooming) return;
+      updateGeolocateCameraContract(true);
+    };
+    const handleZoomEnd = () => {
+      if (!userZooming) return;
+      userZooming = false;
+      updateGeolocateCameraContract(true);
+      const locationButton = containerRef.current?.querySelector<HTMLElement>(
+        ".maplibregl-ctrl-geolocate",
+      );
+      if (
+        trackingBeforeUserZoom &&
+        !userTrackingRef.current &&
+        locationButton?.classList.contains(
+          "maplibregl-ctrl-geolocate-background",
+        )
+      ) {
+        geolocate.trigger();
+      }
+      trackingBeforeUserZoom = false;
+      if (containerRef.current) {
+        containerRef.current.dataset.userZoom = map.getZoom().toFixed(2);
+      }
+      zoomFocusFrame = window.requestAnimationFrame(() => {
+        zoomFocusFrame = null;
+        refocusTrackedUser();
+      });
+    };
+    map.on("zoomstart", handleZoomStart);
+    map.on("zoom", handleZoom);
+    map.on("zoomend", handleZoomEnd);
+
+    const panel = document.querySelector<HTMLElement>(".route-panel");
+    const panelObserver = new ResizeObserver(() => {
+      updateGeolocateCameraContract(hasInitialUserFocus);
+      if (!userTrackingRef.current || userZooming) return;
+      if (panelFocusFrame !== null) {
+        window.cancelAnimationFrame(panelFocusFrame);
+      }
+      panelFocusFrame = window.requestAnimationFrame(() => {
+        panelFocusFrame = null;
+        refocusTrackedUser();
+      });
+    });
+    if (panel) panelObserver.observe(panel);
 
     let orientationFocusFrame: number | null = null;
     const orientToLatestUser = (attempt = 0) => {
@@ -903,12 +1012,15 @@ export function MapCanvas({
           ).toFixed(2);
         }
       });
-      map.easeTo({
-        center: coordinate,
-        offset: target.offset,
-        duration: 520,
-        essential: true,
-      });
+      map.easeTo(
+        {
+          center: coordinate,
+          offset: target.offset,
+          duration: 520,
+          essential: true,
+        },
+        { geolocateSource: true },
+      );
     };
     const selectHeldPoint = (point: { x: number; y: number }) => {
       map.stop();
@@ -976,16 +1088,29 @@ export function MapCanvas({
 
     geolocate.on("trackuserlocationstart", () => {
       userTrackingRef.current = true;
+      onUserTrackingChangeRef.current(true);
+      if (containerRef.current) {
+        containerRef.current.dataset.userTracking = "active";
+      }
+      updateGeolocateCameraContract(hasInitialUserFocus);
       const location = latestUserLocationRef.current;
       if (location) orientToUser(location);
     });
     geolocate.on("userlocationfocus", () => {
       userTrackingRef.current = true;
+      onUserTrackingChangeRef.current(true);
+      if (containerRef.current) {
+        containerRef.current.dataset.userTracking = "active";
+      }
       const location = latestUserLocationRef.current;
       if (location) orientToUser(location);
     });
     geolocate.on("trackuserlocationend", () => {
       userTrackingRef.current = false;
+      onUserTrackingChangeRef.current(false);
+      if (containerRef.current) {
+        containerRef.current.dataset.userTracking = "inactive";
+      }
     });
     geolocate.on("geolocate", (event) => {
       const location: Coordinate = [
@@ -1041,6 +1166,37 @@ export function MapCanvas({
         },
         before,
       );
+      if (map.getSource("mapsource")) {
+        map.addLayer(
+          {
+            id: "active-rail-network",
+            type: "line",
+            source: "mapsource",
+            "source-layer": "transportation",
+            filter: ["in", ["get", "class"], ["literal", ["rail", "transit"]]],
+            layout: {
+              visibility: modeRef.current === "train" ? "visible" : "none",
+              "line-cap": "round",
+              "line-join": "round",
+            },
+            paint: {
+              "line-color": "#d8ed9d",
+              "line-width": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                8,
+                1.4,
+                16,
+                4.5,
+              ],
+              "line-opacity": 0.82,
+              "line-blur": 0.25,
+            },
+          },
+          before,
+        );
+      }
       map.addSource("route", { type: "geojson", data: emptyLine() });
       map.addSource("route-played", { type: "geojson", data: emptyLine() });
       map.addSource("route-connectors", {
@@ -1299,6 +1455,16 @@ export function MapCanvas({
       if (orientationFocusFrame !== null) {
         window.cancelAnimationFrame(orientationFocusFrame);
       }
+      if (zoomFocusFrame !== null) {
+        window.cancelAnimationFrame(zoomFocusFrame);
+      }
+      if (panelFocusFrame !== null) {
+        window.cancelAnimationFrame(panelFocusFrame);
+      }
+      panelObserver.disconnect();
+      map.off("zoomstart", handleZoomStart);
+      map.off("zoom", handleZoom);
+      map.off("zoomend", handleZoomEnd);
       cancelHold();
       if (holdFocusTimer !== null) window.clearTimeout(holdFocusTimer);
       canvasContainer.removeEventListener("pointerdown", beginHold, true);
@@ -1323,6 +1489,24 @@ export function MapCanvas({
     };
     map.setStyle(`/map/style.json?surface=${surface}`);
   }, [surface]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !map.getLayer("active-rail-network")) return;
+    map.setLayoutProperty(
+      "active-rail-network",
+      "visibility",
+      mode === "train" ? "visible" : "none",
+    );
+    if (containerRef.current) {
+      containerRef.current.dataset.transportContext =
+        mode === "bus"
+          ? "bus-stops"
+          : mode === "train"
+            ? "railway-tracks-stations-light-rail"
+            : "road-network";
+    }
+  }, [mode, ready]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1382,7 +1566,9 @@ export function MapCanvas({
           const location = latestUserLocationRef.current;
           onNavigatePointRef.current(
             coordinate,
-            location ? { lat: location[1], lon: location[0] } : null,
+            userTrackingRef.current && location
+              ? { lat: location[1], lon: location[0] }
+              : null,
           );
           setHeldPoint(null);
         },
@@ -1502,7 +1688,14 @@ export function MapCanvas({
       });
       businessMarkersRef.current.push(marker);
     }
-    if (points.length > 0 && focusedDiscoveryRef.current !== activeDiscovery) {
+    const isTransportContext = ["transit_stop", "railway_station"].includes(
+      activeDiscovery,
+    );
+    if (
+      points.length > 0 &&
+      !isTransportContext &&
+      focusedDiscoveryRef.current !== activeDiscovery
+    ) {
       const bounds = points.reduce(
         (value, coordinate) => value.extend(coordinate),
         new LngLatBounds(points[0]!, points[0]!),

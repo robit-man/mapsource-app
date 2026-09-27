@@ -14,7 +14,7 @@ corresponding behavior.
       on loopback.
 - [x] `scripts/deployment-check.mjs` passes against the supervised loopback
       service and the live origin.
-- [x] All seven route modes and all five map surfaces pass after the supervised
+- [x] All five route modes and all five map surfaces pass after the supervised
       service is restarted (not merely after rebuilding static assets).
 - [x] Desktop and mobile screenshots have been inspected at the live origin.
 - [x] Commit is pushed to `main` and its GitHub Actions run is green.
@@ -82,11 +82,13 @@ real-backend contract for styles, tiles, previews, and route modes.
 
 ## Travel modes and routing
 
-- [x] Provide hike, walk, run, bike, car, transit, and train modes with distinct
-      panels and labels.
-- [x] Keep all seven mode controls simultaneously visible/selectable on mobile.
-- [ ] Verify live geometry for every mode; car uses `auto`, transit/train use the
-      available `bus` network profile, bike uses `bicycle`, and foot modes use
+- [x] Provide walk, bike, car, bus, and train modes with distinct panels,
+      professional mode icons, and labels. Bus mode loads mapped bus/transit
+      stops; train mode loads mapped railway stations and emphasizes the vector
+      railway/light-rail network rather than relying on labels alone.
+- [x] Keep all five mode controls simultaneously visible/selectable on mobile.
+- [ ] Verify live geometry for every mode; car uses `auto`, bus/train use the
+      available `bus` network profile, bike uses `bicycle`, and walk uses
       `pedestrian`.
 - [x] Route replay supports progress, play/pause, restart, and speed.
 
@@ -145,6 +147,10 @@ or search`.
       above the long-press waypoint.
 - [x] Navigate uses current device location as origin when starting a new route;
       when a destination already exists it asks before replacing it.
+- [x] The inspection-card Navigate action makes the selected point the
+      destination. It uses the current position only while tracking is active;
+      otherwise it leaves a destination-only route, expands the sheet to half,
+      and arms origin selection from map, search, or current location.
 - [ ] Tapping ordinary map space outside a held-point marker/action cluster
       clears the held point, building highlight, and unrevealed inspection.
 - [x] Resolve a held map point immediately to the mapped business/building and
@@ -155,7 +161,7 @@ or search`.
 - [x] Select only the smallest exact building footprint, render the highlight
       on its 3D extrusion, and resolve details from its address/centroid rather
       than reverse-geocoding the visually displaced facade pixel.
-- [x] Keep travel-mode headers concise (`Hike`, `Bike`, `Car`, and so on)
+- [x] Keep travel-mode headers concise (`Walk`, `Bike`, `Car`, and so on)
       without redundant `plan` wording.
 - [x] Use the resolved street address as the selected-building heading, keep
       coordinates as its subtitle, and suppress generic OSM values such as
@@ -175,6 +181,9 @@ or search`.
 - [x] Location click requests both geolocation and orientation permission.
 - [x] While device tracking is active, center the user in the map area that is
       actually visible above a half-height mobile action sheet.
+- [x] Keep map zoom user-controlled while location/heading tracking is active;
+      preserve the selected zoom across sensor updates and keep the location
+      anchored at the visible-region center after zooming.
 - [x] Use tilt-compensated absolute orientation, screen rotation compensation,
       circular smoothing, poor-accuracy rejection, GPS course while moving, and
       nearest-route bearing fallback.

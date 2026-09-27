@@ -31,7 +31,7 @@ const MAX_PROXY_BYTES = 8 * 1024 * 1024;
 type WaypointInput = { lat: number; lon: number; label?: string };
 type RouteInput = {
   waypoints?: WaypointInput[];
-  mode?: "hike" | "walk" | "run" | "bike" | "car" | "transit" | "train";
+  mode?: "walk" | "bike" | "car" | "bus" | "train";
 };
 
 const discoveryCategories = new Set([
@@ -43,6 +43,8 @@ const discoveryCategories = new Set([
   "fuel",
   "hotel",
   "park",
+  "transit_stop",
+  "railway_station",
 ]);
 
 let keyPromise: Promise<string> | undefined;
@@ -343,6 +345,171 @@ app.get<{
       ),
     );
     const client = await mapsourceClient();
+    if (category === "railway_station") {
+      const bbox = [south, west, north, east]
+        .map((value) => value.toFixed(7))
+        .join(",");
+      const query =
+        `[out:json][timeout:20];(` +
+        `nwr["railway"~"^(station|halt|tram_stop)$"](${bbox});` +
+        `nwr["station"~"^(light_rail|subway|train)$"](${bbox});` +
+        `nwr["public_transport"="station"](${bbox});` +
+        `);out center tags 80;`;
+      const response = await fetch(`${mapsourceOrigin}/api/interpreter`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${await resolveApiKey()}`,
+          "content-type": "text/plain; charset=utf-8",
+          origin: demoOrigin,
+        },
+        body: query,
+        signal: AbortSignal.timeout(25_000),
+      });
+      if (!response.ok) {
+        return apiFailure(
+          reply,
+          response.status,
+          await response.json().catch(() => undefined),
+        );
+      }
+      const payload = (await response.json()) as {
+        elements?: Array<{
+          type?: "node" | "way" | "relation";
+          id?: number;
+          lat?: number;
+          lon?: number;
+          center?: { lat?: number; lon?: number };
+          tags?: Record<string, string>;
+        }>;
+      };
+      const overpassPlaces = (payload.elements ?? []).flatMap((element) => {
+        const placeLat = element.lat ?? element.center?.lat;
+        const placeLon = element.lon ?? element.center?.lon;
+        if (
+          typeof placeLat !== "number" ||
+          typeof placeLon !== "number" ||
+          !finiteCoordinate(placeLat, placeLon) ||
+          !element.type ||
+          !Number.isFinite(element.id)
+        ) {
+          return [];
+        }
+        const tags = element.tags ?? {};
+        const meanLatitude = ((lat + placeLat) / 2) * (Math.PI / 180);
+        const eastMeters = (placeLon - lon) * 111_320 * Math.cos(meanLatitude);
+        const northMeters = (placeLat - lat) * 111_320;
+        return [
+          {
+            id: `osm-${element.type}-${element.id}`,
+            name: tags.name ?? tags.ref ?? null,
+            categories: [
+              tags.railway ? `railway=${tags.railway}` : null,
+              tags.station ? `station=${tags.station}` : null,
+              tags.public_transport
+                ? `public_transport=${tags.public_transport}`
+                : null,
+            ].filter(Boolean),
+            coordinate: { lat: placeLat, lon: placeLon },
+            address: {
+              housenumber: tags["addr:housenumber"] ?? null,
+              street: tags["addr:street"] ?? null,
+              city: tags["addr:city"] ?? null,
+              state: tags["addr:state"] ?? null,
+              postcode: tags["addr:postcode"] ?? null,
+              country: tags["addr:country"] ?? null,
+            },
+            distanceMeters: Math.round(Math.hypot(eastMeters, northMeters)),
+            properties: tags,
+            sources: [
+              {
+                dataset: "OpenStreetMap",
+                id: `${element.type}/${element.id}`,
+                url: `https://www.openstreetmap.org/${element.type}/${element.id}`,
+              },
+            ],
+          },
+        ];
+      });
+      if (overpassPlaces.length > 0) {
+        reply.header("cache-control", "private, max-age=20");
+        return { category, radius, places: overpassPlaces };
+      }
+
+      // Some regional Overpass generations intentionally carry a smaller POI
+      // subset than the global Photon index. Keep the result bounded to the
+      // current viewport and return only real, indexed railway records instead
+      // of manufacturing a station marker when that subset has no match.
+      const lookup = await client.GET("/api/places/lookup", {
+        params: {
+          query: {
+            q: "railway station",
+            lat,
+            lon,
+            limit: 20,
+            bbox: `${west},${south},${east},${north}`,
+            bounded: true,
+          },
+        },
+      });
+      if (lookup.error)
+        return apiFailure(reply, lookup.response.status, lookup.error);
+      const lookupPayload = lookup.data as {
+        results?: Array<{
+          id?: string;
+          name?: string;
+          displayName?: string;
+          category?: string;
+          coordinate?: { lat?: number; lon?: number };
+          address?: Record<string, string>;
+          distanceMeters?: number;
+          sources?: Array<{
+            dataset?: string;
+            id?: string;
+            type?: string;
+            url?: string;
+          }>;
+        }>;
+      };
+      const places = (lookupPayload.results ?? []).flatMap((place) => {
+        const placeLat = place.coordinate?.lat;
+        const placeLon = place.coordinate?.lon;
+        if (!finiteCoordinate(placeLat, placeLon)) return [];
+        const address = place.address ?? {};
+        return [
+          {
+            id: place.id ?? `station-${placeLat}-${placeLon}`,
+            name: place.name ?? place.displayName ?? "Railway station",
+            categories: [place.category ?? "railway_station"],
+            coordinate: { lat: placeLat, lon: placeLon },
+            address: {
+              housenumber: address.houseNumber ?? address.housenumber ?? null,
+              street: address.street ?? address.road ?? null,
+              city: address.city ?? address.town ?? address.village ?? null,
+              state: address.state ?? null,
+              postcode: address.postcode ?? null,
+              country: address.country ?? null,
+            },
+            distanceMeters: place.distanceMeters ?? null,
+            properties: {
+              category: place.category ?? "railway_station",
+              display_name:
+                place.displayName ?? place.name ?? "Railway station",
+            },
+            sources: (place.sources ?? []).map((source) => ({
+              dataset: source.dataset ?? "OpenStreetMap",
+              id: source.id ?? place.id ?? "railway-station",
+              url:
+                source.url ??
+                (source.type && source.id
+                  ? `https://www.openstreetmap.org/${source.type}/${source.id}`
+                  : "https://www.openstreetmap.org"),
+            })),
+          },
+        ];
+      });
+      reply.header("cache-control", "private, max-age=20");
+      return { category, radius, places };
+    }
     const result = await client.GET("/api/places/nearby", {
       params: { query: { lat, lon, radius, category, limit: 80 } },
     });
@@ -423,17 +590,12 @@ app.post<{ Body: RouteInput }>(
         },
       });
     }
-    const mode = request.body.mode ?? "hike";
-    if (
-      !new Set(["hike", "walk", "run", "bike", "car", "transit", "train"]).has(
-        mode,
-      )
-    ) {
+    const mode = request.body.mode ?? "walk";
+    if (!new Set(["walk", "bike", "car", "bus", "train"]).has(mode)) {
       return reply.code(400).send({
         error: {
           code: "BAD_REQUEST",
-          message:
-            "Mode must be hike, walk, run, bike, car, transit, or train.",
+          message: "Mode must be walk, bike, car, bus, or train.",
         },
       });
     }
@@ -442,7 +604,7 @@ app.post<{ Body: RouteInput }>(
         ? "bicycle"
         : mode === "car"
           ? "auto"
-          : mode === "transit" || mode === "train"
+          : mode === "bus" || mode === "train"
             ? "bus"
             : "pedestrian";
     const client = await mapsourceClient();

@@ -27,6 +27,7 @@ import { usePlaceSearch } from "../use-place-search";
 import { Icon } from "./Icon";
 
 type RoutePanelProps = {
+  focusOriginSelection: boolean;
   inspection: InspectionState | null;
   mode: RouteMode;
   onAddInspection: () => void;
@@ -56,7 +57,7 @@ type RoutePanelProps = {
   onReplaySpeed: (speed: number) => void;
 };
 
-type ModeIcon = "walk" | "run" | "bike" | "car" | "bus" | "train";
+type ModeIcon = "walk" | "bike" | "car" | "bus" | "train";
 
 const MODES: Array<{
   id: RouteMode;
@@ -66,25 +67,11 @@ const MODES: Array<{
   kicker: string;
 }> = [
   {
-    id: "hike",
-    label: "Hike",
-    icon: "walk",
-    title: "Hike",
-    kicker: "Trail route",
-  },
-  {
     id: "walk",
     label: "Walk",
     icon: "walk",
     title: "Walk",
     kicker: "Pedestrian route",
-  },
-  {
-    id: "run",
-    label: "Run",
-    icon: "run",
-    title: "Run",
-    kicker: "Running route",
   },
   {
     id: "bike",
@@ -101,11 +88,11 @@ const MODES: Array<{
     kicker: "Road route",
   },
   {
-    id: "transit",
-    label: "Transit",
+    id: "bus",
+    label: "Bus",
     icon: "bus",
-    title: "Transit",
-    kicker: "Public transport",
+    title: "Bus",
+    kicker: "Bus stops + road network",
   },
   {
     id: "train",
@@ -144,14 +131,6 @@ function stopLabel(
   return String(index);
 }
 
-function pace(distanceKm = 0, durationSeconds = 0) {
-  if (distanceKm <= 0 || durationSeconds <= 0) return "—";
-  const totalMinutes = durationSeconds / 60 / distanceKm;
-  const minutes = Math.floor(totalMinutes);
-  const seconds = Math.round((totalMinutes - minutes) * 60);
-  return `${minutes}:${String(seconds).padStart(2, "0")} /km`;
-}
-
 function speed(distanceKm = 0, durationSeconds = 0) {
   if (distanceKm <= 0 || durationSeconds <= 0) return "—";
   return `${(distanceKm / (durationSeconds / 3_600)).toFixed(1)} km/h`;
@@ -170,6 +149,7 @@ function safeExternalWebsite(value: string | undefined) {
 }
 
 export function RoutePanel({
+  focusOriginSelection,
   inspection,
   mode,
   onAddInspection,
@@ -219,7 +199,7 @@ export function RoutePanel({
     ? waypoints.findIndex((point) => point.id === stopDrag.id)
     : -1;
   const activeStop = activeStopIndex >= 0 ? waypoints[activeStopIndex] : null;
-  const isOutdoor = ["hike", "walk", "run", "bike"].includes(mode);
+  const isOutdoor = mode === "walk" || mode === "bike";
   const inlineWaypoint = waypoints.find(
     (waypoint) => waypoint.id === inlineSearchId,
   );
@@ -290,6 +270,25 @@ export function RoutePanel({
     setSheetMode(mode);
     setLiveSheetHeight(sheetHeightFor(mode));
   };
+
+  useEffect(() => {
+    if (!focusOriginSelection || window.innerWidth > 760) return;
+    const frame = window.requestAnimationFrame(() => {
+      const expanded = Math.max(320, window.innerHeight - 86);
+      const height = Math.min(
+        expanded,
+        Math.max(320, window.innerHeight * 0.5),
+      );
+      setSheetMode("half");
+      sheetHeightRef.current = height;
+      document.documentElement.style.setProperty(
+        "--active-sheet-height",
+        `${height}px`,
+      );
+      setSheetHeight(height);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusOriginSelection]);
 
   const startSheetDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (window.innerWidth > 760) return;
@@ -450,9 +449,9 @@ export function RoutePanel({
   const compactMetrics = [
     { label: "Distance", value: formatDistance(routeDistance) },
     { label: "Time", value: formatDuration(routeDuration) },
-    ...(mode === "run"
+    ...(mode === "bike"
       ? [
-          { label: "Pace", value: pace(routeDistance, routeDuration) },
+          { label: "Average", value: speed(routeDistance, routeDuration) },
           {
             label: "Gain",
             value: `${Math.round(elevation?.gainMeters ?? 0)} m`,
@@ -462,40 +461,28 @@ export function RoutePanel({
             value: `${Math.round(elevation?.maxMeters ?? 0)} m`,
           },
         ]
-      : mode === "bike"
+      : mode === "walk"
         ? [
-            { label: "Average", value: speed(routeDistance, routeDuration) },
             {
               label: "Gain",
               value: `${Math.round(elevation?.gainMeters ?? 0)} m`,
+            },
+            {
+              label: "Loss",
+              value: `${Math.round(elevation?.lossMeters ?? 0)} m`,
             },
             {
               label: "High",
               value: `${Math.round(elevation?.maxMeters ?? 0)} m`,
             },
           ]
-        : mode === "hike" || mode === "walk"
-          ? [
-              {
-                label: "Gain",
-                value: `${Math.round(elevation?.gainMeters ?? 0)} m`,
-              },
-              {
-                label: "Loss",
-                value: `${Math.round(elevation?.lossMeters ?? 0)} m`,
-              },
-              {
-                label: "High",
-                value: `${Math.round(elevation?.maxMeters ?? 0)} m`,
-              },
-            ]
-          : [
-              { label: "Stops", value: String(waypoints.length) },
-              {
-                label: "Profile",
-                value: mode === "car" ? "Auto" : "Transit",
-              },
-            ]),
+        : [
+            { label: "Stops", value: String(waypoints.length) },
+            {
+              label: "Profile",
+              value: mode === "car" ? "Auto" : mode === "bus" ? "Bus" : "Rail",
+            },
+          ]),
   ];
 
   return (
@@ -578,22 +565,7 @@ export function RoutePanel({
           <span>{formatDuration(routeDuration)}</span>
         </div>
         <div className="stat-grid">
-          {mode === "run" ? (
-            <>
-              <div>
-                <small>Pace</small>
-                <strong>{pace(routeDistance, routeDuration)}</strong>
-              </div>
-              <div>
-                <small>Gain</small>
-                <strong>{Math.round(elevation?.gainMeters ?? 0)} m</strong>
-              </div>
-              <div>
-                <small>High</small>
-                <strong>{Math.round(elevation?.maxMeters ?? 0)} m</strong>
-              </div>
-            </>
-          ) : mode === "bike" ? (
+          {mode === "bike" ? (
             <>
               <div>
                 <small>Average</small>
@@ -623,7 +595,7 @@ export function RoutePanel({
                 <strong>Auto</strong>
               </div>
             </>
-          ) : mode === "transit" || mode === "train" ? (
+          ) : mode === "bus" || mode === "train" ? (
             <>
               <div>
                 <small>ETA</small>
@@ -635,7 +607,7 @@ export function RoutePanel({
               </div>
               <div>
                 <small>Network</small>
-                <strong>Transit</strong>
+                <strong>{mode === "bus" ? "Bus stops" : "Rail"}</strong>
               </div>
             </>
           ) : (
@@ -838,7 +810,10 @@ export function RoutePanel({
             {(waypoints.length === 0 ||
               (waypoints.length === 1 &&
                 waypoints[0]?.routeRole === "destination")) && (
-              <div className="empty-stop-row" data-route-role="origin">
+              <div
+                className={`empty-stop-row ${focusOriginSelection ? "is-selecting" : ""}`}
+                data-route-role="origin"
+              >
                 <span className="stop-index">A</span>
                 <div className="empty-stop-actions">
                   <button
@@ -1038,11 +1013,7 @@ export function RoutePanel({
               >
                 <div className="section-heading">
                   <span>
-                    {mode === "run"
-                      ? "Run elevation"
-                      : mode === "bike"
-                        ? "Ride elevation"
-                        : "Elevation"}
+                    {mode === "bike" ? "Ride elevation" : "Walk elevation"}
                   </span>
                   <small>
                     {Math.round(elevation?.minMeters ?? 0)}–
@@ -1137,16 +1108,16 @@ export function RoutePanel({
               <strong>
                 {mode === "car"
                   ? "Road overview"
-                  : mode === "transit"
-                    ? "Transit network route"
-                    : "Rail connection preview"}
+                  : mode === "bus"
+                    ? "Bus-stop network route"
+                    : "Rail and light-rail connection"}
               </strong>
               <p>
                 {mode === "car"
                   ? "A road-network route with ordered stops and turn-by-turn maneuvers. Live traffic is not inferred."
-                  : mode === "transit"
-                    ? "Uses the available bus-capable network profile. Live arrivals and agency schedules are not included."
-                    : "Uses the available transit network profile for this preview. Confirm live rail schedules with the operator."}
+                  : mode === "bus"
+                    ? "Routes on the bus-capable road graph and references mapped OpenStreetMap bus stops. Live arrivals and agency schedules are not included."
+                    : "References mapped railway tracks, stations, and light-rail stations for the rail preview. Confirm live service and schedules with the operator."}
               </p>
             </div>
           </section>

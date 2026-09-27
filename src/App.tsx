@@ -78,7 +78,7 @@ function placeEndpoint(
 
 export default function App() {
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
-  const [mode, setMode] = useState<RouteMode>("hike");
+  const [mode, setMode] = useState<RouteMode>("walk");
   const [route, setRoute] = useState<RouteResponse | null>(null);
   const [routeState, setRouteState] = useState<
     "idle" | "loading" | "ready" | "error"
@@ -108,6 +108,14 @@ export default function App() {
   const pendingEndpointRef = useRef<"origin" | "destination" | null>(null);
   const pendingCurrentLocationRef = useRef(false);
   const userLocationRef = useRef<{ lat: number; lon: number } | null>(null);
+  const userLocationActiveRef = useRef(false);
+  const transportDiscoveryCategory =
+    mode === "bus"
+      ? "transit_stop"
+      : mode === "train"
+        ? "railway_station"
+        : null;
+  const mapDiscoveryCategory = discoveryCategory ?? transportDiscoveryCategory;
   const heldPointDetails = useMemo(() => {
     if (!inspection) return null;
     if (inspection.status === "loading") {
@@ -153,11 +161,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!discoveryCategory) return;
+    if (!mapDiscoveryCategory) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       const params = new URLSearchParams({
-        category: discoveryCategory,
+        category: mapDiscoveryCategory,
         lat: String(center.lat),
         lon: String(center.lon),
         west: String(viewBounds.west),
@@ -187,7 +195,7 @@ export default function App() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [center.lat, center.lon, discoveryCategory, viewBounds]);
+  }, [center.lat, center.lon, mapDiscoveryCategory, viewBounds]);
 
   const routeSignature = useMemo(
     () =>
@@ -454,34 +462,44 @@ export default function App() {
       ) {
         return;
       }
-      const existingStart = waypoints[0];
-      const origin = userLocation
-        ? {
+      const destination: Waypoint = {
+        id: newId(),
+        label:
+          meaningfulPlaceName(inspection?.place ?? null) ??
+          placeAddress(inspection?.place ?? null) ??
+          "Selected destination",
+        routeRole: "destination",
+        ...coordinate,
+      };
+      if (userLocation) {
+        setWaypoints([
+          {
             id: "current-location",
             label: "Current location",
+            routeRole: "origin",
             ...userLocation,
-          }
-        : existingStart;
-      if (!origin) return;
-      setWaypoints([
-        origin,
-        {
-          id: newId(),
-          label: inspection?.place?.name ?? "Selected destination",
-          ...coordinate,
-        },
-      ]);
-      setSelectedWaypointId(null);
+          },
+          destination,
+        ]);
+        pendingEndpointRef.current = null;
+        setSelectedWaypointId(null);
+      } else {
+        setWaypoints([destination]);
+        pendingEndpointRef.current = "origin";
+        setSelectedWaypointId("pending-origin");
+      }
+      setInspection(null);
     },
-    [inspection?.place?.name, waypoints],
+    [inspection?.place, waypoints],
   );
 
   return (
     <main className="app-shell">
       <MapCanvas
-        activeDiscovery={discoveryCategory}
+        activeDiscovery={mapDiscoveryCategory}
         discoveryPlaces={discoveryPlaces}
         heldPointDetails={heldPointDetails}
+        mode={mode}
         onBoundsChange={setViewBounds}
         onCenterChange={setCenter}
         onAddIntermediate={addIntermediatePoint}
@@ -499,6 +517,9 @@ export default function App() {
               ...coordinate,
             }),
           );
+        }}
+        onUserTrackingChange={(active) => {
+          userLocationActiveRef.current = active;
         }}
         onWaypointMove={moveWaypoint}
         replayProgress={replayProgress}
@@ -568,6 +589,7 @@ export default function App() {
 
       <RoutePanel
         inspection={inspection}
+        focusOriginSelection={selectedWaypointId === "pending-origin"}
         mode={mode}
         onAddInspection={() => {
           if (inspection) addIntermediatePoint(inspection.coordinate);
@@ -618,7 +640,11 @@ export default function App() {
             .querySelector<HTMLButtonElement>(".maplibregl-ctrl-geolocate")
             ?.click();
         }}
-        onModeChange={setMode}
+        onModeChange={(nextMode) => {
+          setMode(nextMode);
+          setDiscoveryCategory(null);
+          setDiscoveryPlaces([]);
+        }}
         onEndRoute={() => {
           setWaypoints([]);
           setRoute(null);
@@ -630,7 +656,12 @@ export default function App() {
         }}
         onMoveSelect={setSelectedWaypointId}
         onNavigateInspection={() => {
-          if (inspection) navigateToPoint(inspection.coordinate, null);
+          if (inspection) {
+            navigateToPoint(
+              inspection.coordinate,
+              userLocationActiveRef.current ? userLocationRef.current : null,
+            );
+          }
         }}
         onRemove={(id) =>
           setWaypoints((current) => current.filter((point) => point.id !== id))
