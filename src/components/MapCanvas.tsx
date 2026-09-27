@@ -1421,7 +1421,10 @@ export function MapCanvas({
         `Hold and drag ${waypoint.label} to move this stop`,
       );
       element.title = "Hold, then drag to move this stop";
+      const visual = document.createElement("span");
+      visual.className = "map-stop__visual";
       const label = document.createElement("span");
+      label.className = "map-stop__label";
       label.textContent =
         waypoints.length === 1 && waypoint.routeRole === "destination"
           ? "B"
@@ -1430,7 +1433,8 @@ export function MapCanvas({
             : index === waypoints.length - 1
               ? "B"
               : String(index + 1);
-      element.append(label);
+      visual.append(label);
+      element.append(visual);
       element.addEventListener("click", (event) => event.stopPropagation());
       const marker = new MapLibreMarker({
         element,

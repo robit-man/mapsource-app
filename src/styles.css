@@ -1331,13 +1331,21 @@ summary:focus-visible {
   cursor: grab;
   font-size: 9px;
   font-weight: 850;
+  line-height: 1;
   touch-action: none;
-  transition:
-    scale 150ms ease,
-    box-shadow 150ms ease;
 }
 
-.map-stop::before {
+.map-stop__visual {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  transform-origin: 50% 100%;
+  transition: transform 150ms ease;
+  will-change: transform;
+}
+
+.map-stop__visual::before {
   position: absolute;
   top: 6px;
   left: 6px;
@@ -1350,6 +1358,7 @@ summary:focus-visible {
   border-radius: 50% 50% 50% 8px;
   box-shadow: 0 5px 18px rgba(0, 0, 0, 0.42);
   transform: rotate(-45deg);
+  transition: box-shadow 150ms ease;
 }
 
 .map-stop::after {
@@ -1357,27 +1366,26 @@ summary:focus-visible {
   display: none;
 }
 
-.map-stop:is(:hover, .is-selected, .is-dragging) {
-  scale: 1.18;
+.map-stop:is(:hover, .is-selected, .is-dragging) .map-stop__visual {
+  transform: scale(1.18);
 }
 
-.map-stop:is(:hover, .is-selected, .is-dragging)::before {
+.map-stop:is(:hover, .is-selected, .is-dragging) .map-stop__visual::before {
   box-shadow:
     0 0 0 5px rgba(216, 237, 157, 0.15),
     0 8px 24px rgba(0, 0, 0, 0.46);
 }
 
 .map-stop.is-dragging {
-  scale: 1;
   cursor: grabbing;
+}
+
+.map-stop.is-dragging .map-stop__visual {
+  transform: scale(1);
   transition: none;
 }
 
-.map-stop {
-  line-height: 1;
-}
-
-.map-stop > span {
+.map-stop__label {
   position: relative;
   z-index: 1;
   display: block;

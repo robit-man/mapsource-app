@@ -736,6 +736,32 @@ test("keeps the camera under a directly placed map waypoint", async ({
     .toBeLessThan(2);
 });
 
+test("keeps a selected waypoint pinned at its map tip", async ({ page }) => {
+  await seedRoute(page);
+  const marker = page.locator(".map-stop").first();
+  const markerVisual = marker.locator(".map-stop__visual");
+  await page.waitForTimeout(900);
+  const before = await markerVisual.boundingBox();
+  expect(before).not.toBeNull();
+
+  await page
+    .getByRole("button", { name: /Move Lower Macleay Trailhead on map/ })
+    .click();
+  await expect(marker).toHaveClass(/is-selected/);
+  await expect
+    .poll(async () => (await markerVisual.boundingBox())?.width ?? 0)
+    .toBeGreaterThan(before!.width + 4);
+
+  const selected = await markerVisual.boundingBox();
+  expect(selected).not.toBeNull();
+  expect(
+    Math.hypot(
+      selected!.x + selected!.width / 2 - (before!.x + before!.width / 2),
+      selected!.y + selected!.height - (before!.y + before!.height),
+    ),
+  ).toBeLessThan(1);
+});
+
 test("pans from a waypoint drag and moves it only after a long press", async ({
   page,
 }) => {
