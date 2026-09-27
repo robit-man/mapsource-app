@@ -1889,16 +1889,25 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
     .poll(() => routeRequestsByPage.get(page) ?? 0)
     .toBeGreaterThan(requestsBeforeNavigation);
   await expect.poll(() => mapZoom(page)).toBeCloseTo(afterPinch, 1);
-  const reroute = routeBodiesByPage.get(page)?.at(-1) as
-    | { waypoints?: Array<{ lat?: number; lon?: number }> }
-    | undefined;
-  expect(reroute?.waypoints?.[0]?.lat).toBeCloseTo(45.5502, 4);
+  await expect
+    .poll(() => {
+      const reroute = routeBodiesByPage.get(page)?.at(-1) as
+        | { waypoints?: Array<{ lat?: number; lon?: number }> }
+        | undefined;
+      const origin = reroute?.waypoints?.[0];
+      if (origin?.lat === undefined || origin.lon === undefined)
+        return Infinity;
+      return Math.max(
+        Math.abs(origin.lat - 45.5502),
+        Math.abs(origin.lon - -122.6802),
+      );
+    })
+    .toBeLessThan(0.00005);
   await panMapByTouch(page, context);
   await expect(page.locator(".map-canvas")).toHaveAttribute(
     "data-camera-following",
     "detached",
   );
-  expect(reroute?.waypoints?.[0]?.lon).toBeCloseTo(-122.6802, 4);
   await expect(page.locator(".map-canvas")).toHaveAttribute(
     "data-camera-following",
     "detached",
