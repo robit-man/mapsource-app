@@ -1152,6 +1152,11 @@ export function MapCanvas({
     window.requestAnimationFrame(attachOrientationRequest);
 
     const canvasContainer = map.getCanvasContainer();
+    let singleTouchStart: {
+      identifier: number;
+      clientX: number;
+      clientY: number;
+    } | null = null;
     const finishMultiTouchGesture = () => {
       if (!preserveMultiTouchFollow) return;
       preserveMultiTouchFollow = false;
@@ -1164,9 +1169,22 @@ export function MapCanvas({
       if (
         event.target instanceof Node &&
         canvasContainer.contains(event.target) &&
+        event.touches.length === 1
+      ) {
+        const touch = event.touches[0]!;
+        singleTouchStart = {
+          identifier: touch.identifier,
+          clientX: touch.clientX,
+          clientY: touch.clientY,
+        };
+      }
+      if (
+        event.target instanceof Node &&
+        canvasContainer.contains(event.target) &&
         event.touches.length >= 2 &&
         userFollowingRef.current
       ) {
+        singleTouchStart = null;
         preserveMultiTouchFollow = true;
         preserveZoomFollow = true;
         userCameraInteractedRef.current = true;
@@ -1178,7 +1196,32 @@ export function MapCanvas({
         }
       }
     };
+    const trackTouchMove = (event: TouchEvent) => {
+      if (
+        preserveMultiTouchFollow ||
+        event.touches.length !== 1 ||
+        !singleTouchStart
+      ) {
+        return;
+      }
+      const touch = Array.from(event.touches).find(
+        (candidate) => candidate.identifier === singleTouchStart?.identifier,
+      );
+      if (
+        !touch ||
+        Math.hypot(
+          touch.clientX - singleTouchStart.clientX,
+          touch.clientY - singleTouchStart.clientY,
+        ) < 8
+      ) {
+        return;
+      }
+      singleTouchStart = null;
+      userCameraInteractedRef.current = true;
+      if (userTrackingRef.current) setCameraFollowing(false);
+    };
     const trackTouchEnd = (event: TouchEvent) => {
+      singleTouchStart = null;
       if (containerRef.current) {
         containerRef.current.dataset.mapTouchCount = String(
           event.touches.length,
@@ -1200,6 +1243,10 @@ export function MapCanvas({
       passive: true,
     });
     window.addEventListener("touchcancel", trackTouchEnd, {
+      capture: true,
+      passive: true,
+    });
+    window.addEventListener("touchmove", trackTouchMove, {
       capture: true,
       passive: true,
     });
@@ -1819,6 +1866,7 @@ export function MapCanvas({
       window.removeEventListener("touchstart", trackTouchStart, true);
       window.removeEventListener("touchend", trackTouchEnd, true);
       window.removeEventListener("touchcancel", trackTouchEnd, true);
+      window.removeEventListener("touchmove", trackTouchMove, true);
       mapContainer.removeEventListener(
         "pointerdown",
         captureZoomControlIntent,
