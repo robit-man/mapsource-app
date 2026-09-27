@@ -238,5 +238,5 @@ location` origin actions; destination shows `Select on map or search`.
 - [x] TODO-VERIFY-006 Live desktop and mobile browser checks cover IP focus,
       location follow/detach/recenter, pinch while navigating, style switching,
       live progress, maneuver arrows, and automatic rerouting.
-- [ ] TODO-VERIFY-007 The release commit is pushed to `main` and its GitHub
-      Actions run is green.
+- [x] TODO-VERIFY-007 Release commit `316b11b` is pushed to `main`; GitHub
+      Actions release-gate run `36334870014` completed successfully.

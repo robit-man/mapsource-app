@@ -46,6 +46,7 @@ live and device checks.
 | 2026-09-27 | Current full source gate    | `npm run validate`; `npm audit --audit-level=high`             | Pass: formatting, lint, TypeScript, 14 unit tests, clean build, 30 applicable browser tests, and 0 vulnerabilities |
 | 2026-09-27 | Built/supervised/live APIs  | `npm run deploy:check` against ports 3224, 3220, and public    | Pass: five styles, previews, tile classes, transit discovery, five route modes, and satellite                      |
 | 2026-09-27 | Live navigation interaction | `npm run deploy:check:interaction` against the public origin   | Pass: IP focus, live GPS progress, maneuver arrow, style continuity, pinch detach, Recenter, and automatic reroute |
+| 2026-09-27 | Hosted release gate         | GitHub Actions run `36334870014` for `316b11b`                 | Pass: clean install, formatting, lint, TypeScript, unit coverage, production build, 30 browser tests, and audit    |
 | Pending    | Device sensors              | physical iOS/Android heading and calibration exercise          | Not yet run                                                                                                        |
 
 Focused browser contracts live in `tests/e2e/app.spec.ts`. They cover location
