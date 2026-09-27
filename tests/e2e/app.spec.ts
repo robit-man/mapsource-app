@@ -1262,6 +1262,10 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
   context,
   isMobile,
 }) => {
+  // This is intentionally a full mobile journey: sheet snapping, long-route
+  // overflow, map hold, GPS navigation, pinch detachment, and rerouting. A
+  // single-worker software-WebGL runner takes longer than the ordinary case.
+  test.slow();
   test.skip(!isMobile, "mobile sheet contract");
   await seedRoute(page);
   const panel = page.getByRole("complementary", { name: "Route planner" });
