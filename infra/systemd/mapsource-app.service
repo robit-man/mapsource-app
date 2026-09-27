@@ -1,0 +1,38 @@
+[Unit]
+Description=Mapsource Trail integration application
+Documentation=file:///home/roko/Documents/Projects/Utilities/maps/mapsource-app/docs/runbook.md
+After=network-online.target mapsource.service
+Wants=network-online.target mapsource.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=roko
+WorkingDirectory=/home/roko/Documents/Projects/Utilities/maps/mapsource-app
+Environment=PATH=/home/roko/.local/share/fnm/node-versions/v24.14.0/installation/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=3220
+Environment=MAPSOURCE_API_ORIGIN=http://127.0.0.1:8787
+Environment=MAPSOURCE_DEMO_ORIGIN=https://mapsource.io
+EnvironmentFile=-/etc/mapsource-app.env
+ExecStart=/home/roko/.local/share/fnm/node-versions/v24.14.0/installation/bin/node dist-server/server/index.js
+Restart=always
+RestartSec=3
+TimeoutStartSec=20
+TimeoutStopSec=20
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+
+[Install]
+WantedBy=multi-user.target

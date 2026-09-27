@@ -1,0 +1,7 @@
+dist
+dist-server
+coverage
+playwright-report
+test-results
+package-lock.json
+.aiwg

@@ -1,0 +1,35 @@
+node_modules/
+dist/
+build/
+.env
+.DS_Store
+coverage/
+.idea/
+.vscode/
+
+# Claude Code local session state
+.claude/settings.local.json
+
+# AIWG — ignore only high-churn runtime subdirs, NOT .aiwg/ itself
+.aiwg/working/
+.aiwg/ralph/
+.aiwg/ralph-external/
+.aiwg/security-engineering/reviews/disclosures/
+# Dependencies and generated outputs
+node_modules/
+dist/
+dist-server/
+coverage/
+playwright-report/
+test-results/
+.vite/
+*.tsbuildinfo
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# OS/editor noise
+.DS_Store
+*.log
