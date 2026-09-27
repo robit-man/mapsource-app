@@ -7,6 +7,11 @@
   "engines": {
     "node": ">=20.19"
   },
+  "overrides": {
+    "eslint-plugin-react-hooks": {
+      "zod-validation-error": "4.0.2"
+    }
+  },
   "scripts": {
     "dev": "concurrently -k -n web,server -c green,cyan \"vite --host 127.0.0.1\" \"tsx watch server/index.ts\"",
     "dev:web": "vite --host 127.0.0.1",
@@ -23,8 +28,8 @@
     "deploy:check": "node scripts/deployment-check.mjs"
   },
   "dependencies": {
-    "@fastify/static": "10.1.5",
     "@fastify/rate-limit": "11.2.0",
+    "@fastify/static": "10.1.5",
     "fastify": "5.12.5",
     "maplibre-gl": "6.11.2",
     "mapsource": "0.1.0",
@@ -36,15 +41,15 @@
     "@playwright/test": "1.63.0",
     "@testing-library/jest-dom": "6.8.0",
     "@testing-library/react": "16.3.0",
-    "@types/node": "24.3.1",
     "@types/geojson": "7946.0.16",
+    "@types/node": "24.3.1",
     "@types/react": "19.1.13",
     "@types/react-dom": "19.1.9",
     "@vitejs/plugin-react": "5.0.4",
     "@vitest/coverage-v8": "4.1.11",
     "concurrently": "9.2.4",
     "eslint": "10.0.1",
-    "eslint-plugin-react-hooks": "6.0.0",
+    "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-react-refresh": "0.4.22",
     "jsdom": "27.0.0",
     "prettier": "3.6.2",

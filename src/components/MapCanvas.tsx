@@ -83,9 +83,11 @@ export function MapCanvas({
   const [ready, setReady] = useState(false);
   const lastCameraUpdate = useRef(0);
 
-  selectedRef.current = selectedWaypointId;
-  onMapPickRef.current = onMapPick;
-  onCenterChangeRef.current = onCenterChange;
+  useEffect(() => {
+    selectedRef.current = selectedWaypointId;
+    onMapPickRef.current = onMapPick;
+    onCenterChangeRef.current = onCenterChange;
+  }, [onCenterChange, onMapPick, selectedWaypointId]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;

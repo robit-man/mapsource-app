@@ -17,8 +17,6 @@ export function SearchBar({ center, onSelect }: SearchBarProps) {
   useEffect(() => {
     const trimmed = query.trim();
     if (trimmed.length < 2) {
-      setResults([]);
-      setStatus("idle");
       return;
     }
     const controller = new AbortController();
@@ -69,8 +67,13 @@ export function SearchBar({ center, onSelect }: SearchBarProps) {
           aria-label="Search trailheads, parks, and addresses"
           autoComplete="off"
           onChange={(event) => {
-            setQuery(event.target.value);
+            const nextQuery = event.target.value;
+            setQuery(nextQuery);
             setOpen(true);
+            if (nextQuery.trim().length < 2) {
+              setResults([]);
+              setStatus("idle");
+            }
           }}
           onFocus={() => setOpen(true)}
           placeholder="Search trailheads, parks, addresses"

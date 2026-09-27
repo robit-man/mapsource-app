@@ -61,10 +61,13 @@ export default function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    setRouteState("loading");
-    setRouteError(null);
-    setReplayProgress(0);
-    setReplaying(false);
+    const loadingTimer = window.setTimeout(() => {
+      if (controller.signal.aborted) return;
+      setRouteState("loading");
+      setRouteError(null);
+      setReplayProgress(0);
+      setReplaying(false);
+    }, 0);
     const timer = window.setTimeout(() => {
       fetch("/api/route", {
         method: "POST",
@@ -98,6 +101,7 @@ export default function App() {
         });
     }, 220);
     return () => {
+      window.clearTimeout(loadingTimer);
       window.clearTimeout(timer);
       controller.abort();
     };

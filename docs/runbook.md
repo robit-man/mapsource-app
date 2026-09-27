@@ -40,6 +40,16 @@ npm run deploy:check
 
 Then verify `https://app.mapsource.io` and one actual route in a desktop and phone viewport.
 
+## Public edge inventory
+
+The existing remotely managed Cloudflare Tunnel named `mapsource` contains these ordered ingress rules:
+
+1. `mapsource.io` → `http://127.0.0.1:3210`
+2. `app.mapsource.io` → `http://127.0.0.1:3220`
+3. terminal `http_status:404`
+
+The proxied `app.mapsource.io` CNAME targets that tunnel's `cfargotunnel.com` hostname. Cloudflare configuration and DNS use separate scoped credentials held by the adjacent Mapsource repository; neither credential belongs in this repository or service environment. When changing ingress, fetch the current remote configuration first and preserve every unrelated hostname plus the terminal fallback.
+
 ## Logs
 
 ```bash
@@ -57,4 +67,4 @@ The unit writes only to journald. It creates no application log files, tile cach
 4. Restart `mapsource-app.service`.
 5. Repeat loopback and public checks.
 
-If only the Cloudflare route is faulty, revert the hostname ingress change and leave the healthy loopback service running.
+If only the Cloudflare route is faulty, remove exactly the `app.mapsource.io` ingress entry and its CNAME while preserving `mapsource.io`, every other hostname, and the terminal fallback. Leave the healthy loopback service running and verify `mapsource.io` after the edge rollback.

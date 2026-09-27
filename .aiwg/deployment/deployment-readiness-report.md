@@ -46,6 +46,5 @@ Target: `app.mapsource.io` → `127.0.0.1:3220`
 - [x] Loopback readiness and representative user workflow pass.
 - [x] Rollback path is documented.
 - [x] No secrets are present in source.
-- [ ] systemd unit installed and verified.
-- [ ] Public hostname and TLS path verified.
-
+- [x] systemd unit installed and verified.
+- [x] Public hostname and TLS path verified.

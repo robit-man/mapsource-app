@@ -2,7 +2,7 @@
 
 A complete one-page route-planning application built with the public [`mapsource`](https://www.npmjs.com/package/mapsource) npm package. It demonstrates the kind of end-to-end mapping experience normally split across a basemap vendor, search provider, routing provider, elevation provider, and a separate outdoor activity application.
 
-The live deployment is intended for `https://app.mapsource.io`.
+The live deployment is available at [`app.mapsource.io`](https://app.mapsource.io).
 
 ## What the example includes
 
