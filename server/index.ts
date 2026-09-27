@@ -9,6 +9,7 @@ import {
   toMapsourceError,
   type MapsourceApiClient,
 } from "mapsource";
+import { addHouseNumberLayers } from "../src/map-style.js";
 import { rankSearchForRegion } from "../src/regional-search.js";
 
 const app = Fastify({
@@ -713,7 +714,7 @@ app.get<{ Querystring: { surface?: string } }>(
         await response.json().catch(() => undefined),
       );
     const style = (await response.json()) as {
-      sources?: Record<string, { tiles?: string[] }>;
+      sources?: Record<string, { type?: string; tiles?: string[] }>;
       glyphs?: string;
       layers?: Array<Record<string, unknown>>;
       [key: string]: unknown;
@@ -758,6 +759,7 @@ app.get<{ Querystring: { surface?: string } }>(
         0,
         hillshade,
       );
+    addHouseNumberLayers(style, surface);
     reply.header("cache-control", "public, max-age=300");
     return style;
   },

@@ -38,6 +38,15 @@ for (const [surface, expectedName] of Object.entries({
   if (!style?.layers?.some((layer) => layer.id === "transit.rail")) {
     throw new Error(`${path} omitted the rail/light-rail network layer`);
   }
+  for (const layerId of [
+    "mapsource.house-numbers",
+    "mapsource.house-numbers-close",
+  ]) {
+    const layer = style?.layers?.find((candidate) => candidate.id === layerId);
+    if (!layer || layer["source-layer"] !== "housenumber") {
+      throw new Error(`${path} omitted ${layerId}`);
+    }
+  }
   process.stdout.write(`${path} ${response.status} ${style.name}\n`);
 }
 

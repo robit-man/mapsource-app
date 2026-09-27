@@ -284,7 +284,7 @@ location` origin actions; destination shows `Select on map or search`.
       rotating icon with a compact raw phone heading in degrees for physical
       debugging. Long-press again to restore the icon, and suppress the click
       action after a completed hold.
-- [ ] APP-099 Show available house numbers over residential building footprints
+- [x] APP-099 Show available house numbers over residential building footprints
       at useful close zooms, comparable to visible business names but with
       collision/priority rules that keep dense neighborhoods legible.
 - [x] APP-100 When compass confidence is low, visibly instruct the user to

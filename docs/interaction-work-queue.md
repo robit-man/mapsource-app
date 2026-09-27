@@ -245,7 +245,7 @@ or search`.
 - [x] Long-press that heading control to toggle a small raw phone-heading degree
       readout in the existing button; long-press again restores the rotating
       compass icon without also triggering the perspective click.
-- [ ] At close zooms, label residential buildings with available house numbers,
+- [x] At close zooms, label residential buildings with available house numbers,
       using collision and priority controls comparable to business labels.
 - [x] Show a calibration instruction when the compass reports low confidence;
       while motion is established, dynamically weight GPS course more heavily
