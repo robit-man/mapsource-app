@@ -55,7 +55,9 @@ Focused browser contracts live in `tests/e2e/app.spec.ts`. They cover location
 and heading, the complete planner flow, discovery, attribution geometry, all
 planner families, all mobile modes, zoom locking, direct waypoint placement,
 long-press actions, sheet dragging, the three snap modes, minimized metrics, and
-the long waypoint rail. `scripts/deployment-check.mjs` is the independent
+the long waypoint rail. Revealed selected-place details may open the sheet once,
+but must never prevent a later drag from reaching the true minimized state.
+`scripts/deployment-check.mjs` is the independent
 real-backend contract for styles, tiles, previews, and route modes.
 
 ## Application chrome and map controls

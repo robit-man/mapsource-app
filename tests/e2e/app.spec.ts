@@ -1742,6 +1742,33 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
   expect(minimizedTarget[1]).toBeLessThan(
     (page.viewportSize()?.height ?? 800) / 2,
   );
+  await page.getByRole("button", { name: "Inspect map point" }).click();
+  await expect(panel).toHaveAttribute("data-sheet-mode", "half");
+  await expect(page.getByLabel("Selected place details")).toBeVisible();
+  await expect
+    .poll(async () => (await panel.boundingBox())?.height ?? 0)
+    .toBeGreaterThan(400);
+  const revealedHandle = page.getByRole("button", {
+    name: "Expand route planner",
+  });
+  const revealedHandleBox = await revealedHandle.boundingBox();
+  expect(revealedHandleBox).not.toBeNull();
+  await page.mouse.move(
+    revealedHandleBox!.x + revealedHandleBox!.width / 2,
+    revealedHandleBox!.y + revealedHandleBox!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    revealedHandleBox!.x + revealedHandleBox!.width / 2,
+    (viewport?.height ?? 800) - 10,
+    { steps: 8 },
+  );
+  await page.mouse.up();
+  await expect(panel).toHaveAttribute("data-sheet-mode", "minimized");
+  await expect
+    .poll(async () => (await panel.boundingBox())?.height ?? Infinity)
+    .toBeLessThanOrEqual(210);
+  await expect(page.getByLabel("Selected place details")).toBeHidden();
   await context.grantPermissions(["geolocation"], {
     origin: new URL(page.url()).origin,
   });

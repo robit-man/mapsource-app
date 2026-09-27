@@ -302,6 +302,10 @@ location` origin actions; destination shows `Select on map or search`.
       within the relevant upstream candidate set. Use lexical relevance only to
       break distance ties, while preserving upstream intent for explicitly
       qualified searches such as `coffee in London`.
+- [x] APP-103 Preserve the smallest mobile action-sheet state after selected
+      place details have been revealed. Opening details may promote a minimized
+      sheet to half height once, but a subsequent downward drag must reach and
+      remain in the true minimized layout rather than being forced back open.
 
 ## Release evidence required before closing in-progress work
 

@@ -172,6 +172,15 @@ function maneuverIcon(instruction: string | undefined) {
   return "straight";
 }
 
+function mobileSheetBounds() {
+  const expanded = Math.max(320, window.innerHeight - 86);
+  return {
+    minimized: Math.min(202, expanded),
+    half: Math.min(expanded, Math.max(320, window.innerHeight * 0.5)),
+    expanded,
+  };
+}
+
 export function RoutePanel({
   focusOriginSelection,
   initialSheetMode,
@@ -216,6 +225,7 @@ export function RoutePanel({
   const sheetDragCleanupRef = useRef<(() => void) | null>(null);
   const sheetHeightRef = useRef<number | undefined>(undefined);
   const sheetMovedRef = useRef(false);
+  const inspectionRevealedRef = useRef(Boolean(inspection?.revealed));
   const progressRailRef = useRef<HTMLDivElement>(null);
   const [stopDrag, setStopDrag] = useState<StopDrag | null>(null);
   const [inlineSearchId, setInlineSearchId] = useState<string | null>(null);
@@ -272,19 +282,10 @@ export function RoutePanel({
     };
   }, [replayProgress, sheetMode, waypoints.length]);
 
-  const sheetBounds = () => {
-    const expanded = Math.max(320, window.innerHeight - 86);
-    return {
-      minimized: Math.min(202, expanded),
-      half: Math.min(expanded, Math.max(320, window.innerHeight * 0.5)),
-      expanded,
-    };
-  };
-
-  const sheetHeightFor = (mode: SheetMode) => sheetBounds()[mode];
+  const sheetHeightFor = (mode: SheetMode) => mobileSheetBounds()[mode];
 
   const nearestSheetMode = (height: number): SheetMode => {
-    const bounds = sheetBounds();
+    const bounds = mobileSheetBounds();
     return (Object.keys(bounds) as SheetMode[]).reduce((closest, mode) =>
       Math.abs(bounds[mode] - height) < Math.abs(bounds[closest] - height)
         ? mode
@@ -305,6 +306,22 @@ export function RoutePanel({
     setSheetMode(mode);
     setLiveSheetHeight(sheetHeightFor(mode));
   };
+
+  useEffect(() => {
+    const wasRevealed = inspectionRevealedRef.current;
+    const isRevealed = Boolean(inspection?.revealed);
+    inspectionRevealedRef.current = isRevealed;
+    if (!wasRevealed && isRevealed && sheetMode === "minimized") {
+      const height = mobileSheetBounds().half;
+      setSheetMode("half");
+      sheetHeightRef.current = height;
+      document.documentElement.style.setProperty(
+        "--active-sheet-height",
+        `${height}px`,
+      );
+      setSheetHeight(height);
+    }
+  }, [inspection?.revealed, sheetMode]);
 
   useEffect(() => {
     if (!focusOriginSelection || window.innerWidth > 760) return;
@@ -344,7 +361,7 @@ export function RoutePanel({
     const move = (pointerEvent: PointerEvent) => {
       if (pointerEvent.pointerId !== drag.pointerId) return;
       pointerEvent.preventDefault();
-      const bounds = sheetBounds();
+      const bounds = mobileSheetBounds();
       const delta = drag.startY - pointerEvent.clientY;
       if (Math.abs(delta) > 3) sheetMovedRef.current = true;
       setLiveSheetHeight(
@@ -458,16 +475,8 @@ export function RoutePanel({
     };
   }, [animateReorder, stopDragging]);
 
-  const presentedSheetMode =
-    inspection?.revealed && sheetMode === "minimized" ? "half" : sheetMode;
-  const presentedSheetHeight =
-    inspection?.revealed && sheetMode === "minimized"
-      ? sheetHeightFor("half")
-      : sheetHeight;
   const panelStyle = (
-    presentedSheetHeight
-      ? { "--sheet-height": `${presentedSheetHeight}px` }
-      : {}
+    sheetHeight ? { "--sheet-height": `${sheetHeight}px` } : {}
   ) as CSSProperties;
 
   const routeDistance = route?.summary?.distanceKm;
@@ -529,17 +538,17 @@ export function RoutePanel({
 
   return (
     <aside
-      className={`route-panel glass sheet--${presentedSheetMode} ${presentedSheetMode !== "minimized" ? "is-open" : ""} ${presentedSheetMode === "expanded" ? "is-expanded" : ""} ${inspection ? "has-inspection" : ""} ${sheetDragging ? "is-dragging-sheet" : ""}`}
+      className={`route-panel glass sheet--${sheetMode} ${sheetMode !== "minimized" ? "is-open" : ""} ${sheetMode === "expanded" ? "is-expanded" : ""} ${inspection ? "has-inspection" : ""} ${sheetDragging ? "is-dragging-sheet" : ""}`}
       data-navigation-progress={replayProgress.toFixed(4)}
       data-navigation-status={navigationStatus}
-      data-sheet-mode={presentedSheetMode}
+      data-sheet-mode={sheetMode}
       aria-label="Route planner"
       style={panelStyle}
     >
       <button
-        aria-expanded={presentedSheetMode === "expanded"}
+        aria-expanded={sheetMode === "expanded"}
         aria-label={
-          presentedSheetMode === "expanded"
+          sheetMode === "expanded"
             ? "Collapse route planner"
             : "Expand route planner"
         }
@@ -549,7 +558,7 @@ export function RoutePanel({
             sheetMovedRef.current = false;
             return;
           }
-          snapSheet(presentedSheetMode === "expanded" ? "half" : "expanded");
+          snapSheet(sheetMode === "expanded" ? "half" : "expanded");
         }}
         onPointerDown={startSheetDrag}
         type="button"
