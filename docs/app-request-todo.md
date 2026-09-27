@@ -200,7 +200,7 @@ location` origin actions; destination shows `Select on map or search`.
 - [x] APP-078 With the sheet half open, center tracked location at the center of
       the visible upper half (about one-quarter viewport height / three-quarters up
       from the bottom), not behind the sheet.
-- [x] APP-079 Let pinch, rotate, and wheel/buttons adjust the camera while
+- [ ] APP-079 Let pinch, rotate, and wheel/buttons adjust the camera while
       device-location follow remains locked; zoom must stay anchored on the
       current location and subsequent GPS fixes must preserve the chosen zoom.
 - [x] APP-080 Only a one-pointer map pan detaches camera follow. Keep live
@@ -233,10 +233,30 @@ location` origin actions; destination shows `Select on map or search`.
 - [x] APP-090 Prefer the selected map feature's name for natural areas, trails,
       parks, and other named features; show coordinates after that name, and use
       coordinates alone when neither an address nor a meaningful name exists.
-- [x] APP-091 Correct compass/map alignment from the actual sensor reference
+- [ ] APP-091 Correct compass/map alignment from the actual sensor reference
       frames: use the W3C tilt and screen-orientation transform, reject invalid
       calibration, prefer fresh device heading over the distinct GPS course,
       and avoid fixed-degree correction offsets.
+- [x] APP-092 Reproduce and fix the confirmed physical-device failure where a
+      GPS update delivered during a two-finger gesture cancels MapLibre pinch
+      zoom. The acceptance test must inject location fixes while both touches
+      remain down; +/- zoom, pinch zoom, marker updates, and camera follow must
+      remain active together, and only a one-finger pan may reveal `Recenter`.
+- [ ] APP-093 Reproduce and fix the confirmed physical-device heading error:
+      the rendered scene is roughly 45 degrees counter-clockwise from the real
+      device heading. Record raw compass, transformed heading, selected heading
+      source, and final map bearing; correct the reference-frame/source error
+      without adding a fixed 45-degree offset, then validate on real hardware.
+- [x] APP-094 Make place search region-aware: rank useful matches in and near
+      the map's current/derived user region ahead of same-name results from
+      distant countries, while retaining a deliberate path to globally search
+      for a specifically requested remote place. Cover text search, stop search,
+      and category discovery with ranking regression tests.
+- [x] APP-095 During live navigation, allow a one-finger map drag to detach
+      the camera without stopping GPS, progress, or rerouting. Show `Recenter`
+      while detached; both that tooltip and the location control must restore
+      follow around the latest current-location fix. Pinch/rotate/zoom must not
+      enter this detached state.
 
 ## Release evidence required before closing in-progress work
 
@@ -252,3 +272,5 @@ location` origin actions; destination shows `Select on map or search`.
       live progress, maneuver arrows, and automatic rerouting.
 - [x] TODO-VERIFY-007 Release commit `316b11b` is pushed to `main`; GitHub
       Actions release-gate run `36334870014` completed successfully.
+- [ ] TODO-VERIFY-008 Confirm the corrected pinch and heading behavior on the
+      reporting physical handset after this release reaches the public origin.

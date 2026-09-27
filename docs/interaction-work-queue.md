@@ -47,6 +47,8 @@ live and device checks.
 | 2026-09-27 | Built/supervised/live APIs  | `npm run deploy:check` against ports 3224, 3220, and public    | Pass: five styles, previews, tile classes, transit discovery, five route modes, and satellite                                                                           |
 | 2026-09-27 | Live navigation interaction | `npm run deploy:check:interaction` against the public origin   | Pass: IP focus, smoothed GPS marker, maneuver arrow, style continuity, locked pinch zoom through later GPS fixes, one-finger pan detach/Recenter, and automatic reroute |
 | 2026-09-27 | Hosted release gate         | GitHub Actions run `36334870014` for `316b11b`                 | Pass: clean install, formatting, lint, TypeScript, unit coverage, production build, 30 browser tests, and audit                                                         |
+| 2026-09-27 | GPS-during-pinch regression | focused and full mobile Playwright contracts                   | Pass: a GPS fix arrives while both touch points remain down; zoom completes, tracking/follow stays active, and no Recenter control appears                              |
+| 2026-09-27 | Regional search ranking     | unit contract plus supervised `/api/search`                    | Pass: nearby Portland matches rank first; explicit `in City, Country` queries retain global lookup                                                                      |
 | Pending    | Device sensors              | physical iOS/Android heading and calibration exercise          | Not yet run                                                                                                                                                             |
 
 Focused browser contracts live in `tests/e2e/app.spec.ts`. They cover location
@@ -158,6 +160,10 @@ or search`.
 
 ## Search and visible-place discovery
 
+- [x] Prefer useful place-search matches in the current map/IP/device region
+      over same-name results halfway around the world. Apply the same regional
+      ranking contract to top search and stop search, retain intentional global
+      lookup, and cover the ordering with deterministic regressions.
 - [x] Keep the search loading spinner perfectly circular and inset from the
       pill's right edge by the same distance as its top and bottom edges.
 - [x] Expanded search fades in nearby category actions for food, coffee,
@@ -214,15 +220,24 @@ or search`.
 - [x] Keep map zoom user-controlled while location/heading tracking is active;
       preserve the selected zoom across sensor updates and keep the location
       anchored at the visible-region center after zooming.
-- [x] Keep pinch, rotate, pitch, wheel, and +/- zoom locked to the current
+- [ ] Keep pinch, rotate, pitch, wheel, and +/- zoom locked to the current
       location while navigation remains live. Only a one-pointer pan detaches
       camera follow and reveals the nearby `Recenter` control.
 - [x] Smooth GPS jitter with an accuracy-aware moving average and continuous
       marker interpolation while preserving prompt real movement and rerouting.
 - [x] Use a selected natural/trail/park feature name plus coordinates when an
       address is unavailable, falling back to coordinates for unnamed terrain.
-- [x] Correct compass alignment through the sensor, screen, and map-bearing
+- [ ] Correct compass alignment through the sensor, screen, and map-bearing
       reference frames; never conceal the cause with a fixed angle offset.
+- [x] Physical-device regression: inject GPS fixes during an in-progress pinch
+      and prove zoom continues while follow and marker updates remain active.
+- [x] During live navigation, one-finger map dragging detaches only the camera,
+      keeps GPS/progress/rerouting active, reveals `Recenter`, and restores
+      current-location follow from either `Recenter` or the location control.
+      Two-finger and zoom gestures must never take this path.
+- [ ] Physical-device regression: scene bearing is currently reported roughly
+      45 degrees counter-clockwise from reality. Capture raw/transformed/source/
+      map-bearing telemetry and fix the actual reference-frame selection.
 - [x] Use tilt-compensated absolute orientation, screen rotation compensation,
       circular smoothing, poor-accuracy rejection, GPS course while moving, and
       nearest-route bearing fallback.

@@ -312,7 +312,11 @@ async function mapZoom(page: Page) {
   );
 }
 
-async function pinchMapOpen(page: Page, context: BrowserContext) {
+async function pinchMapOpen(
+  page: Page,
+  context: BrowserContext,
+  duringGesture?: () => Promise<void>,
+) {
   const canvas = page.locator(".maplibregl-canvas");
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
@@ -336,6 +340,7 @@ async function pinchMapOpen(page: Page, context: BrowserContext) {
       type: "touchMove",
       touchPoints: [point(centerX - distance, 0), point(centerX + distance, 1)],
     });
+    if (distance === 60) await duringGesture?.();
     await page.waitForTimeout(28);
   }
   await session.send("Input.dispatchTouchEvent", {
@@ -578,12 +583,22 @@ test("requests orientation with location and follows an absolute heading", async
       "data-camera-following",
       "active",
     );
+    await expect(page.locator(".map-canvas")).toHaveAttribute(
+      "data-camera-bearing-source",
+      "device",
+    );
     await expect(
       page.getByRole("button", { name: "Recenter on current location" }),
     ).toBeHidden();
 
     const beforePinch = await mapZoom(page);
-    await pinchMapOpen(page, context);
+    await pinchMapOpen(page, context, () =>
+      context.setGeolocation({
+        latitude: 45.53104,
+        longitude: -122.71596,
+        accuracy: 8,
+      }),
+    );
     await expect.poll(() => mapZoom(page)).toBeGreaterThan(beforePinch + 1);
     const afterPinch = await mapZoom(page);
     await page.evaluate(() => {
@@ -1492,7 +1507,13 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
   );
 
   const beforePinch = await mapZoom(page);
-  await pinchMapOpen(page, context);
+  await pinchMapOpen(page, context, () =>
+    context.setGeolocation({
+      latitude: 45.5362,
+      longitude: -122.71252,
+      accuracy: 8,
+    }),
+  );
   await expect.poll(() => mapZoom(page)).toBeGreaterThan(beforePinch + 1);
   await expect(page.locator(".map-canvas")).toHaveAttribute(
     "data-camera-following",
@@ -1535,6 +1556,16 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
   await page
     .getByRole("button", { name: "Recenter on current location" })
     .click();
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-camera-following",
+    "active",
+  );
+  await panMapByTouch(page, context);
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-camera-following",
+    "detached",
+  );
+  await page.getByRole("button", { name: "Find my location" }).click();
   await expect(page.locator(".map-canvas")).toHaveAttribute(
     "data-camera-following",
     "active",

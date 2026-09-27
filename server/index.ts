@@ -9,6 +9,7 @@ import {
   toMapsourceError,
   type MapsourceApiClient,
 } from "mapsource";
+import { rankSearchForRegion } from "../src/regional-search.js";
 
 const app = Fastify({
   logger: true,
@@ -315,7 +316,10 @@ app.get<{ Querystring: { q?: string; lat?: string; lon?: string } }>(
       params: {
         query: {
           q,
-          limit: 8,
+          // Pull a broader candidate set so app-local regional ranking can
+          // promote a nearby namesake that Photon placed just below its first
+          // global results.
+          limit: 20,
           ...(lat !== undefined && lon !== undefined ? { lat, lon } : {}),
         },
       },
@@ -323,7 +327,32 @@ app.get<{ Querystring: { q?: string; lat?: string; lon?: string } }>(
     if (result.error)
       return apiFailure(reply, result.response.status, result.error);
     reply.header("cache-control", "private, max-age=20");
-    return result.data;
+    const data = result.data as {
+      results?: Array<{
+        coordinate?: { lat?: number; lon?: number };
+        distanceMeters?: number;
+        match?: {
+          type?:
+            | "exact"
+            | "prefix"
+            | "partial"
+            | "fuzzy"
+            | "category"
+            | "indexed";
+          score?: number;
+        };
+      }>;
+      [key: string]: unknown;
+    };
+    return {
+      ...data,
+      results: rankSearchForRegion(
+        data.results ?? [],
+        q,
+        lat !== undefined && lon !== undefined ? { lat, lon } : undefined,
+        8,
+      ),
+    };
   },
 );
 

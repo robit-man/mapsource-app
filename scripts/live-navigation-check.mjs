@@ -18,7 +18,7 @@ function cameraZoom(value) {
   return Number((value ?? "0,0,0").split(",")[2]);
 }
 
-async function pinchOpen(page, context) {
+async function pinchOpen(page, context, duringGesture) {
   const box = await page.locator(".maplibregl-canvas").boundingBox();
   if (!box) throw new Error("Map canvas has no rendered bounds");
   const centerX = box.x + box.width / 2;
@@ -41,6 +41,7 @@ async function pinchOpen(page, context) {
       type: "touchMove",
       touchPoints: [point(centerX - distance, 0), point(centerX + distance, 1)],
     });
+    if (distance === 60) await duringGesture?.();
     await page.waitForTimeout(28);
   }
   await session.send("Input.dispatchTouchEvent", {
@@ -195,7 +196,13 @@ try {
   await expect(map).not.toHaveClass(/is-switching-surface/);
 
   const beforePinch = cameraZoom(await map.getAttribute("data-camera"));
-  await pinchOpen(page, context);
+  await pinchOpen(page, context, () =>
+    context.setGeolocation({
+      latitude: 45.5362,
+      longitude: -122.71252,
+      accuracy: 8,
+    }),
+  );
   await expect
     .poll(async () => cameraZoom(await map.getAttribute("data-camera")))
     .toBeGreaterThan(beforePinch + 1);

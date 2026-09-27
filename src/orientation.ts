@@ -61,8 +61,6 @@ export function orientationHeading(
 
 type NavigationHeadingInput = {
   deviceHeading: number | null;
-  deviceUpdatedAt: number;
-  now: number;
   positionHeading: number | null | undefined;
   positionSpeed: number | null | undefined;
   gpsCourse: number | null;
@@ -71,10 +69,13 @@ type NavigationHeadingInput = {
 };
 
 export function navigationHeading(input: NavigationHeadingInput) {
-  if (
-    input.deviceHeading !== null &&
-    input.now - input.deviceUpdatedAt <= 2_500
-  ) {
+  // A compass heading and a GPS course describe different things. Some mobile
+  // browsers pause orientation events while the device is held still; treating
+  // the last compass sample as stale then silently turns the map toward the
+  // direction of travel instead of the direction the handset is facing.
+  // Retain the calibrated compass for the lifetime of the tracking session and
+  // use course/route bearings only when no compass sample has ever arrived.
+  if (input.deviceHeading !== null) {
     return { heading: input.deviceHeading, source: "device" as const };
   }
   if (
