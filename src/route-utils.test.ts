@@ -23,7 +23,7 @@ describe("route utilities", () => {
     expect(lineAtProgress(line, 0.75)).toHaveLength(3);
   });
 
-  it("clamps replay progress and calculates headings", () => {
+  it("clamps route progress and calculates headings", () => {
     const line: [number, number][] = [
       [-122, 45],
       [-121, 45],

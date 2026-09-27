@@ -992,6 +992,10 @@ summary:focus-visible {
   border-bottom: 1px solid var(--line);
 }
 
+.minimized-empty-state {
+  display: none;
+}
+
 .minimized-metrics,
 .minimized-route-progress {
   display: none;
@@ -1041,8 +1045,7 @@ summary:focus-visible {
   font-weight: 620;
 }
 
-.elevation-card,
-.replay-card {
+.elevation-card {
   margin-top: 18px;
 }
 
@@ -1052,14 +1055,6 @@ summary:focus-visible {
   height: 78px;
   overflow: visible;
   border-bottom: 1px solid rgba(216, 237, 157, 0.12);
-}
-
-.replay-card input[type="range"] {
-  width: 100%;
-  height: 3px;
-  margin: 4px 0 12px;
-  accent-color: var(--lime);
-  cursor: pointer;
 }
 
 .mode-card {
@@ -1189,61 +1184,6 @@ summary:focus-visible {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.5;
-}
-
-.replay-controls {
-  display: grid;
-  grid-template-columns: 36px 42px 1fr;
-  gap: 8px;
-  align-items: center;
-}
-
-.round-control,
-.play-control {
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  cursor: pointer;
-}
-
-.round-control {
-  width: 34px;
-  height: 34px;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid var(--line);
-}
-
-.play-control {
-  width: 42px;
-  height: 42px;
-  color: var(--ink);
-  background: var(--lime);
-  border: 0;
-  box-shadow: 0 7px 22px rgba(216, 237, 157, 0.12);
-}
-
-.speed-control {
-  display: flex;
-  justify-content: flex-end;
-  gap: 3px;
-}
-
-.speed-control button {
-  min-width: 32px;
-  height: 28px;
-  color: #788076;
-  background: transparent;
-  border: 0;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 9px;
-  font-weight: 700;
-}
-
-.speed-control button.is-active {
-  color: var(--lime);
-  background: rgba(216, 237, 157, 0.09);
 }
 
 .directions {
@@ -1555,29 +1495,6 @@ summary:focus-visible {
   display: block;
   transform: translateY(-1px);
   line-height: 1;
-}
-
-.replay-marker {
-  display: none;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  background: rgba(216, 237, 157, 0.2);
-  border: 1px solid var(--lime);
-  border-radius: 50%;
-  box-shadow: 0 0 24px rgba(216, 237, 157, 0.75);
-}
-
-.replay-marker.is-active {
-  display: grid;
-}
-
-.replay-marker span {
-  width: 7px;
-  height: 7px;
-  background: var(--paper);
-  border-radius: 50%;
-  box-shadow: 0 0 10px var(--paper);
 }
 
 .business-marker {
@@ -2119,6 +2036,90 @@ summary:focus-visible {
     margin: 0;
     padding: 16px 1px 0;
     border: 0;
+  }
+
+  .minimized-empty-state {
+    display: grid;
+    gap: 8px;
+  }
+
+  .minimized-empty-state__heading {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .minimized-empty-state__heading span {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .minimized-empty-state__heading strong {
+    color: var(--paper);
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+  }
+
+  .minimized-empty-state__heading small {
+    overflow: hidden;
+    color: #858d82;
+    font-size: 8px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .minimized-empty-state__search {
+    display: flex;
+    width: 100%;
+    height: 38px;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 0 13px;
+    color: var(--paper);
+    background: rgba(216, 237, 157, 0.08);
+    border: 1px solid rgba(216, 237, 157, 0.16);
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 650;
+  }
+
+  .minimized-empty-state__categories {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .minimized-empty-state__categories button {
+    display: flex;
+    min-width: 0;
+    height: 43px;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 0 5px;
+    color: #a1a99e;
+    background: rgba(10, 13, 10, 0.3);
+    border: 1px solid rgba(216, 237, 157, 0.1);
+    border-radius: 13px;
+    font-size: 8px;
+    font-weight: 620;
+  }
+
+  .minimized-empty-state__categories button.is-active {
+    color: var(--ink);
+    background: var(--lime);
+    border-color: var(--lime);
+  }
+
+  .minimized-empty-state__categories button span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .route-panel.sheet--minimized .minimized-metrics {

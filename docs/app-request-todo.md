@@ -211,8 +211,9 @@ location` origin actions; destination shows `Select on map or search`.
 
 ## Live navigation, next action, and rerouting
 
-- [x] APP-082 Keep explicit route replay available as a separate preview tool
-      with play/pause, restart, speed, and progress.
+- [x] APP-082 Historical: explicit simulated route replay was implemented, then
+      removed by APP-105 at the owner's request. Live navigation is the sole
+      source of traveled-route progress.
 - [x] APP-083 `Start route` enters live GPS navigation; it must
       never start simulated route replay.
 - [x] APP-084 Advance route progress and next-turn distance from
@@ -293,7 +294,7 @@ location` origin actions; destination shows `Select on map or search`.
       increasingly favor measured direction of travel—especially when compass
       confidence is poor—as part of the live heading fusion.
 - [x] APP-101 Restore durable app state across a page refresh: waypoint values,
-      order and roles; travel mode; route/replay position; map surface and
+      order and roles; travel mode; map surface and
       camera; route-panel mode; discovery filter; and selected-place context.
       Recompute route geometry from the restored inputs, validate and bound the
       versioned browser snapshot, and never serialize permissions, live sensor
@@ -306,6 +307,14 @@ location` origin actions; destination shows `Select on map or search`.
       place details have been revealed. Opening details may promote a minimized
       sheet to half height once, but a subsequent downward drag must reach and
       remain in the true minimized layout rather than being forced back open.
+- [x] APP-104 Replace the blank route-less minimized sheet with a compact,
+      map-first `Explore this area` state: a direct destination-search action
+      and four working nearby-category shortcuts backed by Mapsource discovery.
+      Do not fabricate recent, saved, trending, or personalized content before
+      those data products exist.
+- [x] APP-105 Remove simulated route replay controls, speed, animation marker,
+      persistence, and copy. Keep route progress and the traveled-path overlay
+      driven only by live device-location navigation.
 
 ## Release evidence required before closing in-progress work
 

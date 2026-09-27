@@ -8,8 +8,6 @@ type IconName =
   | "locate"
   | "route"
   | "play"
-  | "pause"
-  | "restart"
   | "grip"
   | "pin"
   | "walk"
@@ -73,15 +71,6 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
       </>
     ),
     play: <path fill="currentColor" stroke="none" d="m8 5 11 7-11 7V5Z" />,
-    pause: (
-      <path fill="currentColor" stroke="none" d="M7 5h4v14H7zM14 5h4v14h-4z" />
-    ),
-    restart: (
-      <>
-        <path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6" />
-        <path d="M4 4v4.6h4.6" />
-      </>
-    ),
     grip: (
       <>
         <circle cx="9" cy="6" r="1" fill="currentColor" stroke="none" />

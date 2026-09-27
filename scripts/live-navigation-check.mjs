@@ -162,7 +162,6 @@ try {
   await page.getByRole("button", { name: "Start route" }).click();
   await expect(map).toHaveAttribute("data-navigation", "active");
   await expect(panel).toHaveAttribute("data-navigation-status", "navigating");
-  await expect(page.locator(".replay-marker")).not.toHaveClass(/is-active/);
   await expect(page.locator(".minimized-next-turn__icon")).toHaveAttribute(
     "data-maneuver-icon",
     /^(straight|turnLeft|turnRight|uTurn|pin)$/,

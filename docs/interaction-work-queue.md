@@ -109,7 +109,8 @@ real-backend contract for styles, tiles, previews, and route modes.
 - [x] Verify live geometry for every mode; car uses `auto`, bus/train use the
       available `bus` network profile, bike uses `bicycle`, and walk uses
       `pedestrian`.
-- [x] Route replay supports progress, play/pause, restart, and speed.
+- [x] Historical: simulated route replay was implemented and later removed at
+      the owner's request; live GPS navigation now exclusively drives progress.
 - [x] Make `Start route` enter live GPS navigation instead of simulated replay;
       advance progress from movement and replace the generic route glyph with a
       direction-specific straight, left, right, or U-turn arrow for the actual
@@ -126,12 +127,16 @@ real-backend contract for styles, tiles, previews, and route modes.
 - [x] Keep the grab target absolutely positioned so it does not push the plan
       title/status row down; top and side insets must match.
 - [x] Half and expanded states expose the route work area with internal scroll.
-- [x] Minimized state shows compact mode-relevant distance/time/gain/loss/high
-      metrics, the next maneuver, waypoint replay progress, and bottom-aligned
+- [x] Minimized state with a route shows compact mode-relevant
+      distance/time/gain/loss/high metrics, the next maneuver, waypoint live
+      navigation progress, and bottom-aligned
       start/end route actions.
 - [x] Minimized progress includes named waypoints on an extended horizontal
-      rail, draggable by touch, faded at both edges, and auto-panned as replay
-      advances so long routes do not crowd labels.
+      rail, draggable by touch, faded at both edges, and auto-panned as live
+      navigation advances so long routes do not crowd labels.
+- [x] Minimized state without a route uses the available space for a direct
+      `Where to?` destination action and nearby food, coffee, outdoors, and fuel
+      discovery rather than blank metrics or invented personalization.
 
 ## Stops and waypoint manipulation
 
@@ -252,8 +257,8 @@ or search`.
 - [x] Show a calibration instruction when the compass reports low confidence;
       while motion is established, dynamically weight GPS course more heavily
       than the uncertain compass as part of the displayed heading.
-- [x] Restore the current route inputs and waypoint order, travel mode, replay
-      position/speed, surface and camera, sheet mode, discovery filter, and
+- [x] Restore the current route inputs and waypoint order, travel mode, surface
+      and camera, sheet mode, discovery filter, and
       selected-place context after refresh from a validated, size-bounded,
       versioned local snapshot. Recalculate the route from canonical inputs and
       do not persist browser permission or live sensor/request handles.
@@ -280,7 +285,8 @@ or search`.
 
 ## Tests already represented in source
 
-- [x] Search, surface selection, camera preservation, terrain, fog, and replay.
+- [x] Search, nearby discovery, surface selection, camera preservation,
+      terrain, fog, and live navigation progress.
 - [x] Orientation permission, heading smoothing, and calibration rejection.
 - [x] Every desktop planner family and every mobile mode control.
 - [x] Inline stop search and reorder pointer lock.

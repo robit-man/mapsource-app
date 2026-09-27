@@ -9,7 +9,7 @@ The live deployment is available at [`app.mapsource.io`](https://app.mapsource.i
 - Mapsource vector cartography, glyphs, terrain tiles, local place search, pedestrian/bicycle routing, maneuvers, and route elevation.
 - Walk, bicycle, car, bus, and train planning with 2–10 ordered stops. Bus views reference mapped bus stops; train views reference mapped railway tracks, stations, and light-rail stations while distinguishing network previews from live schedules.
 - Draggable map stops, tap-to-reposition mode, editable stop names, inline local search for inserted stops, and elastic route-stop reordering with live A/#/B relabeling.
-- Route replay with progress, heading-following camera, 1×/2×/4× speed, and a hydrated traveled path.
+- Live GPS navigation with a hydrated traveled path, maneuver-specific next-turn guidance, off-route detection, and automatic rerouting.
 - Elevation gain, loss, high point, profile, distance, duration, and turn-by-turn directions.
 - Mapsource, satellite, elevation, dark, and light surfaces with real local imagery previews. Esri World Imagery comes from the canonical Satellite source used by the adjacent NOCLIP Earth application, with attribution available from the closed-by-default map information control.
 - Responsive glass UI: a full planner on desktop and a touch-tracking, draggable bottom sheet on phones.
@@ -87,7 +87,7 @@ npm run validate
 npm audit --audit-level=high
 ```
 
-The release gate runs formatting, lint, the sequential TypeScript compiler, unit tests with coverage, a production build, and desktop/mobile Playwright flows. The browser tests cover route planning, expandable search, self-closing layers, all planner families, stop insertion/reordering, replay, attribution state, and the mobile sheet drag gesture.
+The release gate runs formatting, lint, the sequential TypeScript compiler, unit tests with coverage, a production build, and desktop/mobile Playwright flows. The browser tests cover route planning, expandable search and nearby discovery, self-closing layers, all planner families, stop insertion/reordering, live navigation, attribution state, and the mobile sheet drag gesture.
 
 The durable requirement/status ledger is
 [`docs/interaction-work-queue.md`](docs/interaction-work-queue.md). A checked

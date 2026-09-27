@@ -19,7 +19,6 @@ const MAP_SURFACES = new Set<MapSurface>([
   "satellite",
 ]);
 const SHEET_MODES = new Set<SheetMode>(["minimized", "half", "expanded"]);
-const REPLAY_SPEEDS = new Set([1, 2, 4]);
 
 export type PersistedInspection = {
   coordinate: { lat: number; lon: number };
@@ -35,11 +34,8 @@ export type PersistedAppState = {
   surface: MapSurface;
   camera: MapCameraState | null;
   sheetMode: SheetMode;
-  replayProgress: number;
-  replaySpeed: number;
   discoveryCategory: string | null;
   inspection: PersistedInspection | null;
-  routeSignature: string;
 };
 
 type StateStorage = Pick<Storage, "getItem" | "setItem">;
@@ -125,14 +121,10 @@ export function parsePersistedAppState(
       !MAP_SURFACES.has(value.surface as MapSurface) ||
       (value.camera !== null && !validCamera(value.camera)) ||
       !SHEET_MODES.has(value.sheetMode as SheetMode) ||
-      !finiteInRange(value.replayProgress, 0, 1) ||
-      !REPLAY_SPEEDS.has(value.replaySpeed as number) ||
       (discoveryCategory !== null &&
         (typeof discoveryCategory !== "string" ||
           discoveryCategory.length > 64)) ||
-      (value.inspection !== null && !validInspection(value.inspection)) ||
-      typeof value.routeSignature !== "string" ||
-      value.routeSignature.length > 2_048
+      (value.inspection !== null && !validInspection(value.inspection))
     ) {
       return null;
     }

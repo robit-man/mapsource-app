@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { DISCOVERY_FILTERS } from "../discovery-categories";
 import type { SearchResult } from "../types";
 import { usePlaceSearch } from "../use-place-search";
 import { Icon } from "./Icon";
@@ -9,22 +10,6 @@ type SearchBarProps = {
   activeCategory: string | null;
   onCategory: (category: string | null) => void;
 };
-
-const QUICK_FILTERS = [
-  { id: "restaurant", query: "restaurants", label: "Hungry", icon: "food" },
-  { id: "cafe", query: "coffee", label: "Coffee", icon: "coffee" },
-  { id: "shop", query: "shops", label: "Shopping", icon: "shop" },
-  {
-    id: "supermarket",
-    query: "groceries",
-    label: "Groceries",
-    icon: "grocery",
-  },
-  { id: "pharmacy", query: "pharmacy", label: "Pharmacy", icon: "pharmacy" },
-  { id: "fuel", query: "fuel", label: "Fuel", icon: "fuel" },
-  { id: "hotel", query: "hotels", label: "Stay", icon: "hotel" },
-  { id: "park", query: "parks", label: "Outdoors", icon: "park" },
-] as const;
 
 export function SearchBar({
   center,
@@ -120,7 +105,7 @@ export function SearchBar({
       </div>
       {expanded && (
         <div className="quick-filters" aria-label="Explore nearby">
-          {QUICK_FILTERS.map((filter) => (
+          {DISCOVERY_FILTERS.map((filter) => (
             <button
               aria-label={filter.label}
               aria-pressed={activeCategory === filter.id}

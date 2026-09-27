@@ -9,6 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal, flushSync } from "react-dom";
+import { MINIMIZED_DISCOVERY_FILTERS } from "../discovery-categories";
 import {
   coordinateLabel,
   meaningfulPlaceCategories,
@@ -29,6 +30,7 @@ import { usePlaceSearch } from "../use-place-search";
 import { Icon } from "./Icon";
 
 type RoutePanelProps = {
+  activeDiscoveryCategory: string | null;
   focusOriginSelection: boolean;
   initialSheetMode: SheetMode;
   inspection: InspectionState | null;
@@ -40,6 +42,7 @@ type RoutePanelProps = {
   onAddInspection: () => void;
   onCloseInspection: () => void;
   onEndRoute: () => void;
+  onExploreCategory: (category: string) => void;
   onModeChange: (mode: RouteMode) => void;
   waypoints: Waypoint[];
   onInsert: (afterIndex: number) => string | null;
@@ -56,13 +59,7 @@ type RoutePanelProps = {
   route: RouteResponse | null;
   routeState: "idle" | "loading" | "ready" | "error";
   routeError: string | null;
-  replayProgress: number;
-  replaying: boolean;
-  replaySpeed: number;
-  onReplayProgress: (progress: number) => void;
-  onReplayToggle: () => void;
-  onReplayRestart: () => void;
-  onReplaySpeed: (speed: number) => void;
+  navigationProgress: number;
   onStartNavigation: () => void;
 };
 
@@ -182,6 +179,7 @@ function mobileSheetBounds() {
 }
 
 export function RoutePanel({
+  activeDiscoveryCategory,
   focusOriginSelection,
   initialSheetMode,
   inspection,
@@ -193,6 +191,7 @@ export function RoutePanel({
   onAddInspection,
   onCloseInspection,
   onEndRoute,
+  onExploreCategory,
   onModeChange,
   waypoints,
   onInsert,
@@ -209,13 +208,7 @@ export function RoutePanel({
   route,
   routeState,
   routeError,
-  replayProgress,
-  replaying,
-  replaySpeed,
-  onReplayProgress,
-  onReplayToggle,
-  onReplayRestart,
-  onReplaySpeed,
+  navigationProgress,
   onStartNavigation,
 }: RoutePanelProps) {
   const [sheetMode, setSheetMode] = useState<SheetMode>(initialSheetMode);
@@ -260,11 +253,11 @@ export function RoutePanel({
 
   useEffect(() => {
     if (sheetMode !== "minimized") return;
-    const panToReplay = () => {
+    const panToProgress = () => {
       const rail = progressRailRef.current;
       if (!rail) return;
       const maxScroll = Math.max(0, rail.scrollWidth - rail.clientWidth);
-      const travelPosition = replayProgress * rail.scrollWidth;
+      const travelPosition = navigationProgress * rail.scrollWidth;
       const target = Math.max(
         0,
         Math.min(maxScroll, travelPosition - rail.clientWidth * 0.42),
@@ -272,15 +265,15 @@ export function RoutePanel({
       rail.scrollLeft = target;
     };
     const frame = window.requestAnimationFrame(() => {
-      panToReplay();
-      window.requestAnimationFrame(panToReplay);
+      panToProgress();
+      window.requestAnimationFrame(panToProgress);
     });
-    const settledLayout = window.setTimeout(panToReplay, 180);
+    const settledLayout = window.setTimeout(panToProgress, 180);
     return () => {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(settledLayout);
     };
-  }, [replayProgress, sheetMode, waypoints.length]);
+  }, [navigationProgress, sheetMode, waypoints.length]);
 
   const sheetHeightFor = (mode: SheetMode) => mobileSheetBounds()[mode];
 
@@ -482,16 +475,16 @@ export function RoutePanel({
   const routeDistance = route?.summary?.distanceKm;
   const routeDuration = route?.summary?.durationSeconds;
   const routeCoordinateCount = route?.geometry?.coordinates?.length ?? 0;
-  const replayShapeIndex =
+  const progressShapeIndex =
     navigationActive && navigationShapeIndex !== null
       ? navigationShapeIndex
-      : Math.round(replayProgress * Math.max(0, routeCoordinateCount - 1));
+      : Math.round(navigationProgress * Math.max(0, routeCoordinateCount - 1));
   const maneuvers = route?.maneuvers ?? [];
   const nextManeuver =
     maneuvers.find(
       (maneuver) =>
         (maneuver.shapeIndex ?? 0) >=
-        replayShapeIndex + (navigationActive ? 0.001 : 0),
+        progressShapeIndex + (navigationActive ? 0.001 : 0),
     ) ?? maneuvers[maneuvers.length - 1];
   const nextTurnDistanceKm =
     navigationActive && navigationNextTurnMeters !== null
@@ -539,7 +532,7 @@ export function RoutePanel({
   return (
     <aside
       className={`route-panel glass sheet--${sheetMode} ${sheetMode !== "minimized" ? "is-open" : ""} ${sheetMode === "expanded" ? "is-expanded" : ""} ${inspection ? "has-inspection" : ""} ${sheetDragging ? "is-dragging-sheet" : ""}`}
-      data-navigation-progress={replayProgress.toFixed(4)}
+      data-navigation-progress={navigationProgress.toFixed(4)}
       data-navigation-status={navigationStatus}
       data-sheet-mode={sheetMode}
       aria-label="Route planner"
@@ -682,7 +675,7 @@ export function RoutePanel({
             </>
           )}
         </div>
-        {sheetMode === "minimized" && (
+        {sheetMode === "minimized" && route && (
           <div className="minimized-next-turn">
             <span
               className="minimized-next-turn__icon"
@@ -716,18 +709,18 @@ export function RoutePanel({
               )}
           </div>
         )}
-        {sheetMode === "minimized" && (
+        {sheetMode === "minimized" && route && (
           <div
             ref={progressRailRef}
-            aria-label={`Route ${navigationActive ? "navigation" : "replay"} progress ${Math.round(replayProgress * 100)}%`}
+            aria-label={`Route navigation progress ${Math.round(navigationProgress * 100)}%`}
             className="minimized-route-progress"
           >
             <div
               className="minimized-route-progress__content"
               style={
                 {
-                  "--route-progress": `${Math.round(replayProgress * 100)}%`,
-                  "--traveler-position": `${5 + replayProgress * 90}%`,
+                  "--route-progress": `${Math.round(navigationProgress * 100)}%`,
+                  "--traveler-position": `${5 + navigationProgress * 90}%`,
                   "--route-content-width": `${Math.max(360, waypoints.length * 116)}px`,
                 } as CSSProperties
               }
@@ -737,7 +730,7 @@ export function RoutePanel({
               {waypoints.map((waypoint, index) => (
                 <span
                   aria-hidden="true"
-                  className={`minimized-waypoint ${index === 0 ? "is-first" : ""} ${index === waypoints.length - 1 ? "is-last" : ""} ${replayProgress >= index / Math.max(1, waypoints.length - 1) ? "is-passed" : ""}`}
+                  className={`minimized-waypoint ${index === 0 ? "is-first" : ""} ${index === waypoints.length - 1 ? "is-last" : ""} ${navigationProgress >= index / Math.max(1, waypoints.length - 1) ? "is-passed" : ""}`}
                   key={waypoint.id}
                   style={
                     {
@@ -769,6 +762,47 @@ export function RoutePanel({
               End route
             </button>
           </div>
+        )}
+        {sheetMode === "minimized" && !route && (
+          <section
+            aria-label="Explore this area"
+            className="minimized-empty-state"
+          >
+            <div className="minimized-empty-state__heading">
+              <span>
+                <strong>Explore this area</strong>
+                <small>Find somewhere nearby or start a route.</small>
+              </span>
+            </div>
+            <button
+              className="minimized-empty-state__search"
+              onClick={() => onSelectEmptyStop("destination")}
+              type="button"
+            >
+              <Icon name="search" size={14} />
+              Where to?
+            </button>
+            <div
+              aria-label="Nearby categories"
+              className="minimized-empty-state__categories"
+            >
+              {MINIMIZED_DISCOVERY_FILTERS.map((filter) => (
+                <button
+                  aria-label={`Explore ${filter.label.toLowerCase()} nearby`}
+                  aria-pressed={activeDiscoveryCategory === filter.id}
+                  className={
+                    activeDiscoveryCategory === filter.id ? "is-active" : ""
+                  }
+                  key={filter.id}
+                  onClick={() => onExploreCategory(filter.id)}
+                  type="button"
+                >
+                  <Icon name={filter.icon} size={15} />
+                  <span>{filter.label}</span>
+                </button>
+              ))}
+            </div>
+          </section>
         )}
       </section>
 
@@ -1061,7 +1095,10 @@ export function RoutePanel({
             {(waypoints.length === 0 ||
               (waypoints.length === 1 &&
                 waypoints[0]?.routeRole !== "destination")) && (
-              <div className="empty-stop-row" data-route-role="destination">
+              <div
+                className={`empty-stop-row ${selectedWaypointId === "pending-destination" ? "is-selecting" : ""}`}
+                data-route-role="destination"
+              >
                 <span className="stop-index">B</span>
                 <div className="empty-stop-actions">
                   <button
@@ -1135,53 +1172,6 @@ export function RoutePanel({
                 </svg>
               </section>
             )}
-            <section className="replay-card" aria-label="Route replay">
-              <div className="section-heading">
-                <span>{modeInfo.label} replay</span>
-                <small>{Math.round(replayProgress * 100)}%</small>
-              </div>
-              <input
-                aria-label="Replay progress"
-                max="1"
-                min="0"
-                onChange={(event) =>
-                  onReplayProgress(Number(event.target.value))
-                }
-                step="0.001"
-                type="range"
-                value={replayProgress}
-              />
-              <div className="replay-controls">
-                <button
-                  aria-label="Restart replay"
-                  className="round-control"
-                  onClick={onReplayRestart}
-                  type="button"
-                >
-                  <Icon name="restart" size={17} />
-                </button>
-                <button
-                  aria-label={replaying ? "Pause replay" : "Play replay"}
-                  className="play-control"
-                  onClick={onReplayToggle}
-                  type="button"
-                >
-                  <Icon name={replaying ? "pause" : "play"} size={18} />
-                </button>
-                <div className="speed-control" aria-label="Replay speed">
-                  {[1, 2, 4].map((replayRate) => (
-                    <button
-                      className={replaySpeed === replayRate ? "is-active" : ""}
-                      key={replayRate}
-                      onClick={() => onReplaySpeed(replayRate)}
-                      type="button"
-                    >
-                      {replayRate}×
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </section>
           </>
         ) : (
           <section className={`mode-card mode-card--${mode}`}>

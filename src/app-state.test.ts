@@ -36,15 +36,12 @@ const validState: PersistedAppState = {
     pitch: 42,
   },
   sheetMode: "half",
-  replayProgress: 0.35,
-  replaySpeed: 2,
   discoveryCategory: "restaurant",
   inspection: {
     coordinate: { lat: 45.533, lon: -122.72 },
     revealed: true,
     fallbackLabel: "Trail House Cafe",
   },
-  routeSignature: "walk:45.536160,-122.712560;45.525210,-122.716270",
 };
 
 describe("persisted app state", () => {

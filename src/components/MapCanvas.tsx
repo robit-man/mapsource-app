@@ -23,7 +23,6 @@ import {
   bearingDegrees,
   lineAtProgress,
   nearestRouteBearing,
-  pointAtProgress,
 } from "../route-utils";
 import { LocationSmoother } from "../location-smoothing";
 import {
@@ -81,8 +80,7 @@ type MapCanvasProps = {
   onCenterChange: (coordinate: { lat: number; lon: number }) => void;
   onCameraChange: (camera: MapCameraState) => void;
   surface: MapSurface;
-  replayProgress: number;
-  replaying: boolean;
+  navigationProgress: number;
   discoveryPlaces: DiscoveryPlace[];
   activeDiscovery: string | null;
   onBoundsChange: (bounds: ViewBounds) => void;
@@ -581,8 +579,7 @@ export function MapCanvas({
   onCenterChange,
   onCameraChange,
   surface,
-  replayProgress,
-  replaying,
+  navigationProgress,
   discoveryPlaces,
   activeDiscovery,
   onBoundsChange,
@@ -594,7 +591,6 @@ export function MapCanvas({
   const businessPopupRef = useRef<Popup | null>(null);
   const intermediateMarkerRef = useRef<Marker | null>(null);
   const focusedDiscoveryRef = useRef<string | null>(null);
-  const replayMarkerRef = useRef<Marker | null>(null);
   const selectedRef = useRef(selectedWaypointId);
   const onMapPickRef = useRef(onMapPick);
   const onAddIntermediateRef = useRef(onAddIntermediate);
@@ -609,8 +605,7 @@ export function MapCanvas({
   const modeRef = useRef(mode);
   const routeRef = useRef(route);
   const waypointsRef = useRef(waypoints);
-  const replayProgressRef = useRef(replayProgress);
-  const replayingRef = useRef(replaying);
+  const navigationProgressRef = useRef(navigationProgress);
   const heldBuildingRef = useRef<BuildingSelection | null>(null);
   const userTrackingRef = useRef(false);
   const userFollowingRef = useRef(false);
@@ -645,7 +640,6 @@ export function MapCanvas({
   const [heldBuilding, setHeldBuilding] = useState<BuildingSelection | null>(
     null,
   );
-  const lastCameraUpdate = useRef(0);
 
   useEffect(() => {
     selectedRef.current = selectedWaypointId;
@@ -662,8 +656,7 @@ export function MapCanvas({
     modeRef.current = mode;
     routeRef.current = route;
     waypointsRef.current = waypoints;
-    replayProgressRef.current = replayProgress;
-    replayingRef.current = replaying;
+    navigationProgressRef.current = navigationProgress;
   }, [
     onCenterChange,
     onCameraChange,
@@ -675,8 +668,7 @@ export function MapCanvas({
     onUserLocation,
     onUserTrackingChange,
     mode,
-    replayProgress,
-    replaying,
+    navigationProgress,
     route,
     selectedWaypointId,
     surface,
@@ -966,7 +958,6 @@ export function MapCanvas({
     ) => {
       if (
         !userFollowingRef.current ||
-        replayingRef.current ||
         userZooming ||
         preserveMultiTouchFollow ||
         userAdjustingCamera ||
@@ -2008,7 +1999,7 @@ export function MapCanvas({
         );
       }
       map.addSource("route", { type: "geojson", data: emptyLine() });
-      map.addSource("route-played", { type: "geojson", data: emptyLine() });
+      map.addSource("route-traveled", { type: "geojson", data: emptyLine() });
       map.addSource("route-connectors", {
         type: "geojson",
         data: emptyFeatures(),
@@ -2133,9 +2124,9 @@ export function MapCanvas({
       );
       map.addLayer(
         {
-          id: "route-played-line",
+          id: "route-traveled-line",
           type: "line",
-          source: "route-played",
+          source: "route-traveled",
           layout: { "line-cap": "round", "line-join": "round" },
           paint: {
             "line-color": "#e9ffc2",
@@ -2158,14 +2149,14 @@ export function MapCanvas({
       (map.getSource("route-connectors") as GeoJSONSource).setData(
         restoredConnectors,
       );
-      (map.getSource("route-played") as GeoJSONSource).setData({
+      (map.getSource("route-traveled") as GeoJSONSource).setData({
         type: "Feature",
         properties: {},
         geometry: {
           type: "LineString",
           coordinates: lineAtProgress(
             restoredCoordinates,
-            replayProgressRef.current,
+            navigationProgressRef.current,
           ),
         },
       });
@@ -2828,7 +2819,7 @@ export function MapCanvas({
         connectors.features.length,
       );
     }
-    if (coordinates.length > 1 && !replaying && !userTrackingRef.current) {
+    if (coordinates.length > 1 && !userTrackingRef.current) {
       if (preserveCameraForRouteRef.current) {
         preserveCameraForRouteRef.current = false;
         if (containerRef.current) {
@@ -2861,61 +2852,19 @@ export function MapCanvas({
         ].join(",");
       }
     }
-  }, [ready, replaying, route]);
+  }, [ready, route]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
     const coordinates = routeCoordinates(route);
-    const traveled = lineAtProgress(coordinates, replayProgress);
-    (map.getSource("route-played") as GeoJSONSource | undefined)?.setData({
+    const traveled = lineAtProgress(coordinates, navigationProgress);
+    (map.getSource("route-traveled") as GeoJSONSource | undefined)?.setData({
       type: "Feature",
       properties: {},
       geometry: { type: "LineString", coordinates: traveled },
     });
-    const point = pointAtProgress(coordinates, replayProgress);
-    if (!point) return;
-    let replayMarker = replayMarkerRef.current;
-    if (!replayMarker) {
-      const element = document.createElement("div");
-      element.className = "replay-marker";
-      element.innerHTML = "<span></span>";
-      replayMarker = new MapLibreMarker({ element })
-        .setLngLat(point)
-        .addTo(map);
-      replayMarkerRef.current = replayMarker;
-    } else {
-      replayMarker.setLngLat(point);
-    }
-    replayMarker
-      .getElement()
-      .classList.toggle(
-        "is-active",
-        !navigationActive && (replaying || replayProgress > 0),
-      );
-    const now = performance.now();
-    if (replaying && now - lastCameraUpdate.current > 360) {
-      const lookAhead =
-        pointAtProgress(coordinates, Math.min(1, replayProgress + 0.008)) ??
-        point;
-      map.easeTo({
-        center: point,
-        bearing: bearingDegrees(point, lookAhead),
-        pitch: usesTerrain(surface) ? 58 : 42,
-        zoom: Math.max(14.2, map.getZoom()),
-        duration: 420,
-        essential: true,
-      });
-      lastCameraUpdate.current = now;
-    }
-  }, [navigationActive, ready, replayProgress, replaying, route, surface]);
-
-  useEffect(
-    () => () => {
-      replayMarkerRef.current?.remove();
-    },
-    [],
-  );
+  }, [navigationProgress, ready, route]);
 
   return <div className="map-canvas" ref={containerRef} />;
 }

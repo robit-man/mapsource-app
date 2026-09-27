@@ -446,6 +446,56 @@ test("starts without a placeholder route or automatic route request", async ({
   await expect(page.locator(".stop-row")).toHaveCount(0);
 });
 
+test("uses the minimized route-less sheet for search and nearby discovery", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, "mobile empty-sheet contract");
+  const panel = page.getByRole("complementary", { name: "Route planner" });
+  const handle = page.getByRole("button", { name: "Expand route planner" });
+  const handleBox = await handle.boundingBox();
+  expect(handleBox).not.toBeNull();
+  await page.mouse.move(
+    handleBox!.x + handleBox!.width / 2,
+    handleBox!.y + handleBox!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    handleBox!.x + handleBox!.width / 2,
+    (page.viewportSize()?.height ?? 800) - 10,
+    { steps: 8 },
+  );
+  await page.mouse.up();
+
+  await expect(panel).toHaveAttribute("data-sheet-mode", "minimized");
+  const explore = page.getByLabel("Explore this area");
+  await expect(explore.getByText("Explore this area")).toBeVisible();
+  await expect(
+    explore.getByRole("button", { name: "Where to?" }),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel("Nearby categories").getByRole("button"),
+  ).toHaveCount(4);
+  const outdoorsRequest = page.waitForRequest(
+    (request) =>
+      request.url().includes("/api/discover?") &&
+      request.url().includes("category=park"),
+  );
+  const outdoors = page.getByRole("button", {
+    name: "Explore outdoors nearby",
+  });
+  await outdoors.click();
+  await outdoorsRequest;
+  await expect(outdoors).toHaveAttribute("aria-pressed", "true");
+  await explore.getByRole("button", { name: "Where to?" }).click();
+  await expect(
+    page.getByLabel("Search trailheads, parks, and addresses"),
+  ).toBeEnabled();
+  await expect(
+    page.locator('.empty-stop-row[data-route-role="destination"]'),
+  ).toHaveClass(/is-selecting/);
+});
+
 test("restores route inputs and app presentation after refresh", async ({
   page,
   isMobile,
@@ -457,7 +507,6 @@ test("restores route inputs and app presentation after refresh", async ({
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Map layers" }).click();
   await page.getByRole("button", { name: /Dark/ }).click();
-  await page.getByRole("slider", { name: "Replay progress" }).fill("0.35");
   await page.waitForTimeout(900);
   await page.locator(".maplibregl-ctrl-zoom-in").click();
   await page.waitForTimeout(420);
@@ -473,7 +522,6 @@ test("restores route inputs and app presentation after refresh", async ({
           waypoints?: unknown[];
           mode?: string;
           surface?: string;
-          replayProgress?: number;
           sheetMode?: string;
           camera?: { zoom?: number };
         };
@@ -481,7 +529,6 @@ test("restores route inputs and app presentation after refresh", async ({
           waypoints: state.waypoints?.length,
           mode: state.mode,
           surface: state.surface,
-          replayProgress: state.replayProgress,
           sheetMode: state.sheetMode,
           zoom: state.camera?.zoom,
         };
@@ -491,7 +538,6 @@ test("restores route inputs and app presentation after refresh", async ({
       waypoints: 2,
       mode: "bike",
       surface: "dark",
-      replayProgress: 0.35,
       sheetMode: "expanded",
     });
   const requestsBeforeRefresh = routeRequestsByPage.get(page) ?? 0;
@@ -519,9 +565,7 @@ test("restores route inputs and app presentation after refresh", async ({
   await expect(
     page.getByRole("complementary", { name: "Route planner" }),
   ).toHaveAttribute("data-sheet-mode", "expanded");
-  await expect(
-    page.getByRole("slider", { name: "Replay progress" }),
-  ).toHaveValue("0.35");
+  await expect(page.getByLabel("Route replay")).toHaveCount(0);
   await expect(
     page.locator(".stat-primary").getByText("3.14 km"),
   ).toBeVisible();
@@ -609,6 +653,10 @@ test("requests orientation with location and follows an absolute heading", async
   context,
   isMobile,
 }) => {
+  // Mobile software WebGL plus the full sensor-fusion sequence regularly takes
+  // longer than the ordinary CI case; keep every assertion and widen only this
+  // end-to-end journey's timeout.
+  test.slow();
   await context.grantPermissions(["geolocation"], {
     origin: new URL(page.url()).origin,
   });
@@ -976,7 +1024,7 @@ test("requests orientation with location and follows an absolute heading", async
   expect(routeRequestsByPage.get(page)).toBe(0);
 });
 
-test("plans, searches, layers, and replays a walk", async ({
+test("plans, searches, and switches map layers for a walk", async ({
   page,
   isMobile,
 }) => {
@@ -1060,13 +1108,7 @@ test("plans, searches, layers, and replays a walk", async ({
   if (isMobile) {
     await page.getByRole("button", { name: "Expand route planner" }).click();
   }
-  const progress = page.getByRole("slider", { name: "Replay progress" });
-  await progress.fill("0.125");
-  await expect(progress).toHaveValue("0.125");
-  await page.getByRole("button", { name: "Play replay" }).click();
-  await expect(
-    page.getByRole("button", { name: "Pause replay" }),
-  ).toBeVisible();
+  await expect(page.getByLabel("Route replay")).toHaveCount(0);
 });
 
 test("discovers visible businesses and exposes available actions", async ({
@@ -1638,7 +1680,6 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
   await expect(page.locator(".stop-row")).toHaveCount(6);
   await expect(page.getByText("Routing", { exact: true })).toBeVisible();
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
-  await page.getByRole("slider", { name: "Replay progress" }).fill("0.8");
   const expand = page.getByRole("button", { name: "Expand route planner" });
   await expand.click();
   await expect(panel).toHaveAttribute("data-sheet-mode", "expanded");
@@ -1677,17 +1718,14 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
   await expect(metrics.getByText("High", { exact: true })).toBeVisible();
   const nextTurn = page.locator(".minimized-next-turn");
   await expect(nextTurn.getByText("Next turn", { exact: true })).toBeVisible();
-  await expect(nextTurn).toContainText("Turn left toward the overlook.");
-  const rail = page.getByLabel(/Route replay progress/);
+  await expect(nextTurn).toContainText("Follow Lower Macleay Trail.");
+  const rail = page.getByLabel(/Route navigation progress/);
   await expect(rail).toBeVisible();
   await expect(rail.locator(".minimized-waypoint")).toHaveCount(6);
-  await expect(rail.getByText("Waypoint 4")).toBeVisible();
+  await expect(rail.getByText("Waypoint 4")).toHaveCount(1);
   expect(
     await rail.evaluate((element) => element.scrollWidth > element.clientWidth),
   ).toBe(true);
-  await expect
-    .poll(() => rail.evaluate((element) => element.scrollLeft))
-    .toBeGreaterThan(0);
   await expect(rail).toHaveCSS("touch-action", "pan-x");
   expect(
     await rail.evaluate((element) => getComputedStyle(element).maskImage),
@@ -1788,7 +1826,6 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
     "active",
   );
   await expect(panel).toHaveAttribute("data-navigation-status", "navigating");
-  await expect(page.locator(".replay-marker")).not.toHaveClass(/is-active/);
   await expect(
     routeActions.getByRole("button", { name: "Navigating" }),
   ).toBeDisabled();

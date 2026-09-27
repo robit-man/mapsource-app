@@ -156,13 +156,7 @@ export default function App() {
   );
   const [initialLocation, setInitialLocation] =
     useState<InitialMapLocation | null>(null);
-  const [replayProgress, setReplayProgress] = useState(
-    () => restoredState?.replayProgress ?? 0,
-  );
-  const [replaying, setReplaying] = useState(false);
-  const [replaySpeed, setReplaySpeed] = useState(
-    () => restoredState?.replaySpeed ?? 1,
-  );
+  const [navigationProgress, setNavigationProgress] = useState(0);
   const [navigationActive, setNavigationActive] = useState(false);
   const [navigationStatus, setNavigationStatus] =
     useState<NavigationStatus>("idle");
@@ -172,7 +166,6 @@ export default function App() {
   const [navigationNextTurnMeters, setNavigationNextTurnMeters] = useState<
     number | null
   >(null);
-  const animationRef = useRef<number | null>(null);
   const pendingEndpointRef = useRef<"origin" | "destination" | null>(null);
   const pendingCurrentLocationRef = useRef(false);
   const userLocationRef = useRef<{ lat: number; lon: number } | null>(null);
@@ -186,9 +179,6 @@ export default function App() {
   const offRouteFixesRef = useRef(0);
   const lastRerouteAtRef = useRef(0);
   const needsNavigationOriginRef = useRef(false);
-  const restoredRouteSignatureRef = useRef(
-    restoredState?.routeSignature ?? null,
-  );
   const restoredInspectionRef = useRef(restoredState?.inspection ?? null);
   const transportDiscoveryCategory =
     mode === "bus"
@@ -304,8 +294,6 @@ export default function App() {
       surface,
       camera,
       sheetMode,
-      replayProgress,
-      replaySpeed,
       discoveryCategory,
       inspection: inspection
         ? {
@@ -314,16 +302,12 @@ export default function App() {
             fallbackLabel: inspection.fallbackLabel,
           }
         : null,
-      routeSignature,
     }),
     [
       camera,
       discoveryCategory,
       inspection,
       mode,
-      replayProgress,
-      replaySpeed,
-      routeSignature,
       sheetMode,
       surface,
       waypoints,
@@ -355,8 +339,7 @@ export default function App() {
         setRoute(null);
         setRouteState("idle");
         setRouteError(null);
-        setReplayProgress(0);
-        setReplaying(false);
+        setNavigationProgress(0);
         navigationActiveRef.current = false;
         setNavigationActive(false);
         setNavigationStatus("idle");
@@ -365,18 +348,12 @@ export default function App() {
       }, 0);
       return () => window.clearTimeout(resetTimer);
     }
-    const preserveRestoredProgress =
-      restoredRouteSignatureRef.current === routeSignature;
-    if (restoredRouteSignatureRef.current && !preserveRestoredProgress) {
-      restoredRouteSignatureRef.current = null;
-    }
     const controller = new AbortController();
     const loadingTimer = window.setTimeout(() => {
       if (controller.signal.aborted) return;
       setRouteState("loading");
       setRouteError(null);
-      if (!preserveRestoredProgress) setReplayProgress(0);
-      setReplaying(false);
+      setNavigationProgress(0);
     }, 0);
     const timer = window.setTimeout(() => {
       fetch("/api/route", {
@@ -396,9 +373,7 @@ export default function App() {
         .then((body) => {
           setRoute(body);
           setRouteState("ready");
-          if (!preserveRestoredProgress) setReplayProgress(0);
-          restoredRouteSignatureRef.current = null;
-          setReplaying(false);
+          setNavigationProgress(0);
           if (navigationActiveRef.current) {
             offRouteFixesRef.current = 0;
             setNavigationStatus("navigating");
@@ -407,7 +382,6 @@ export default function App() {
         .catch((error: unknown) => {
           if (error instanceof DOMException && error.name === "AbortError")
             return;
-          restoredRouteSignatureRef.current = null;
           setRouteState("error");
           setRouteError(
             error instanceof Error
@@ -425,35 +399,6 @@ export default function App() {
     // routeSignature intentionally isolates coordinate/mode changes from label edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeSignature]);
-
-  useEffect(() => {
-    if (!replaying) {
-      if (animationRef.current !== null)
-        cancelAnimationFrame(animationRef.current);
-      animationRef.current = null;
-      return;
-    }
-    let previous = performance.now();
-    const frame = (now: number) => {
-      const delta = now - previous;
-      previous = now;
-      setReplayProgress((progress) => {
-        const next = progress + (delta / 45_000) * replaySpeed;
-        if (next >= 1) {
-          setReplaying(false);
-          return 1;
-        }
-        return next;
-      });
-      animationRef.current = requestAnimationFrame(frame);
-    };
-    animationRef.current = requestAnimationFrame(frame);
-    return () => {
-      if (animationRef.current !== null)
-        cancelAnimationFrame(animationRef.current);
-      animationRef.current = null;
-    };
-  }, [replaySpeed, replaying]);
 
   const moveWaypoint = useCallback(
     (id: string, coordinate: { lat: number; lon: number }) => {
@@ -698,7 +643,7 @@ export default function App() {
       const position = nearestRoutePosition(coordinates, [fix.lon, fix.lat]);
       if (!position) return;
 
-      setReplayProgress(Math.max(0, Math.min(1, position.progress)));
+      setNavigationProgress(Math.max(0, Math.min(1, position.progress)));
       setNavigationShapeIndex(position.shapeIndex);
       const distances = routeDistances(coordinates);
       const nextManeuver = routeRef.current?.maneuvers?.find(
@@ -724,7 +669,7 @@ export default function App() {
       if (
         haversineMeters([fix.lon, fix.lat], destination) <= arrivalThreshold
       ) {
-        setReplayProgress(1);
+        setNavigationProgress(1);
         setNavigationStatus("arrived");
         offRouteFixesRef.current = 0;
         return;
@@ -789,7 +734,6 @@ export default function App() {
 
   const startNavigation = useCallback(() => {
     if (routeCoordinates(routeRef.current).length < 2) return;
-    setReplaying(false);
     navigationActiveRef.current = true;
     needsNavigationOriginRef.current = true;
     offRouteFixesRef.current = 0;
@@ -829,8 +773,7 @@ export default function App() {
           userLocationActiveRef.current = active;
         }}
         onWaypointMove={moveWaypoint}
-        replayProgress={replayProgress}
-        replaying={replaying}
+        navigationProgress={navigationProgress}
         route={route}
         selectedWaypointId={selectedWaypointId}
         surface={surface}
@@ -895,6 +838,7 @@ export default function App() {
       </div>
 
       <RoutePanel
+        activeDiscoveryCategory={discoveryCategory}
         initialSheetMode={restoredState?.sheetMode ?? "half"}
         inspection={inspection}
         focusOriginSelection={selectedWaypointId === "pending-origin"}
@@ -964,8 +908,10 @@ export default function App() {
           setRouteState("idle");
           setRouteError(null);
           setSelectedWaypointId(null);
-          setReplayProgress(0);
-          setReplaying(false);
+          setNavigationProgress(0);
+        }}
+        onExploreCategory={(category) => {
+          setDiscoveryCategory(category);
         }}
         onMoveSelect={setSelectedWaypointId}
         onNavigateInspection={() => {
@@ -1003,28 +949,10 @@ export default function App() {
             ),
           );
         }}
-        onReplayProgress={(progress) => {
-          stopNavigation();
-          setReplayProgress(progress);
-          setReplaying(false);
-        }}
-        onReplayRestart={() => {
-          stopNavigation();
-          setReplayProgress(0);
-          setReplaying(true);
-        }}
-        onReplaySpeed={setReplaySpeed}
-        onReplayToggle={() => {
-          stopNavigation();
-          if (replayProgress >= 1) setReplayProgress(0);
-          setReplaying((value) => !value);
-        }}
         onSheetModeChange={setSheetMode}
         onStartNavigation={startNavigation}
         onReorder={reorder}
-        replayProgress={replayProgress}
-        replaySpeed={replaySpeed}
-        replaying={replaying}
+        navigationProgress={navigationProgress}
         route={route}
         routeError={routeError}
         routeState={routeState}
