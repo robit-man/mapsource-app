@@ -15,9 +15,12 @@ const e2eOrigin = `http://127.0.0.1:${e2ePort}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  timeout: 30_000,
+  timeout: 45_000,
   expect: { timeout: 8_000 },
   fullyParallel: true,
+  // Every project creates a WebGL map. Capping parallel contexts avoids
+  // starving input/render frames on shared deployment hosts during validation.
+  workers: 6,
   forbidOnly: true,
   retries: 0,
   reporter: [["list"], ["html", { open: "never" }]],

@@ -689,6 +689,7 @@ export function RoutePanel({
               <>
                 <strong>
                   {inspection.place?.name ??
+                    inspection.fallbackLabel ??
                     `${inspection.coordinate.lat.toFixed(5)}, ${inspection.coordinate.lon.toFixed(5)}`}
                 </strong>
                 {inspection.place && (
@@ -705,6 +706,13 @@ export function RoutePanel({
                   </p>
                 )}
                 {inspection.status === "error" && <p>{inspection.message}</p>}
+                {inspection.status === "ready" &&
+                  !inspection.place &&
+                  inspection.fallbackLabel && (
+                    <p>
+                      No mapped street address is available for this building.
+                    </p>
+                  )}
                 <div className="inspection-card__links">
                   {(() => {
                     const phone =

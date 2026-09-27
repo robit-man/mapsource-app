@@ -312,7 +312,11 @@ export default function App() {
   }, []);
 
   const inspectPoint = useCallback(
-    (coordinate: { lat: number; lon: number }, reveal = true) => {
+    (
+      coordinate: { lat: number; lon: number },
+      reveal = true,
+      fallbackLabel?: string,
+    ) => {
       const revealed = (current: InspectionState | null) =>
         reveal ||
         Boolean(
@@ -325,6 +329,7 @@ export default function App() {
         coordinate,
         place: null,
         revealed: revealed(current),
+        fallbackLabel,
       }));
       const params = new URLSearchParams({
         lat: String(coordinate.lat),
@@ -344,6 +349,7 @@ export default function App() {
             coordinate,
             place: body.place ?? null,
             revealed: revealed(current),
+            fallbackLabel,
           })),
         )
         .catch(() =>
@@ -352,6 +358,7 @@ export default function App() {
             coordinate,
             place: null,
             revealed: revealed(current),
+            fallbackLabel,
             message: "Place details are temporarily unavailable.",
           })),
         );

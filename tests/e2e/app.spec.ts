@@ -150,7 +150,33 @@ async function stubApplicationApis(page: Page) {
               features: [
                 {
                   type: "Feature",
-                  properties: { building: "yes", name: "Trail House Cafe" },
+                  properties: {
+                    building: "yes",
+                    name: "Building collection",
+                    render_height: 9,
+                    render_min_height: 0,
+                  },
+                  geometry: {
+                    type: "Polygon",
+                    coordinates: [
+                      [
+                        [-124, 44],
+                        [-121, 44],
+                        [-121, 47],
+                        [-124, 47],
+                        [-124, 44],
+                      ],
+                    ],
+                  },
+                },
+                {
+                  type: "Feature",
+                  properties: {
+                    building: "yes",
+                    name: "Trail House Cafe",
+                    render_height: 24,
+                    render_min_height: 2,
+                  },
                   geometry: {
                     type: "Polygon",
                     coordinates: [
@@ -179,6 +205,16 @@ async function stubApplicationApis(page: Page) {
             type: "fill",
             source: "test-buildings",
             paint: { "fill-color": "#263027", "fill-opacity": 0.01 },
+          },
+          {
+            id: "buildings.extrusion",
+            type: "fill-extrusion",
+            source: "test-buildings",
+            paint: {
+              "fill-extrusion-color": "#263027",
+              "fill-extrusion-height": ["get", "render_height"],
+              "fill-extrusion-base": ["get", "render_min_height"],
+            },
           },
         ],
       }),
@@ -697,6 +733,7 @@ test("opens map-hold actions and routes inspected places through the sheet", asy
     y: Math.min(170, box!.height - 40),
   };
   await page.mouse.move(box!.x + point.x, box!.y + point.y);
+  const inspectRequest = page.waitForRequest("**/api/inspect?**");
   await page.mouse.down();
   await page.waitForTimeout(600);
   await page.mouse.up();
@@ -740,9 +777,38 @@ test("opens map-hold actions and routes inspected places through the sheet", asy
     "data-selected-building",
     "highlighted",
   );
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-selected-building-rendering",
+    "extruded",
+  );
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-selected-building-parts",
+    "1",
+  );
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-selected-building-name",
+    "Trail House Cafe",
+  );
+  const inspectedUrl = new URL((await inspectRequest).url());
+  const [lookupLon, lookupLat] = (
+    (await page
+      .locator(".map-canvas")
+      .getAttribute("data-selected-building-lookup")) ?? ""
+  )
+    .split(",")
+    .map(Number);
+  expect(Number(inspectedUrl.searchParams.get("lat"))).toBeCloseTo(
+    lookupLat!,
+    7,
+  );
+  expect(Number(inspectedUrl.searchParams.get("lon"))).toBeCloseTo(
+    lookupLon!,
+    7,
+  );
 
   const details = page.getByLabel("Selected place details");
   await expect(details.getByText("Trail House Cafe")).toBeVisible();
+  await expect(details.getByText("12 Forest Road Portland")).toBeVisible();
   await expect(
     details.getByRole("link", { name: "Call selected place" }),
   ).toBeVisible();

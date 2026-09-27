@@ -12,7 +12,13 @@ import {
   type MapMouseEvent,
   type Marker,
 } from "maplibre-gl";
-import type { Feature, FeatureCollection, Geometry, LineString } from "geojson";
+import type {
+  Feature,
+  FeatureCollection,
+  LineString,
+  Polygon,
+  Position,
+} from "geojson";
 import {
   bearingDegrees,
   lineAtProgress,
@@ -43,6 +49,7 @@ type MapCanvasProps = {
   onInspectPoint: (
     coordinate: { lat: number; lon: number },
     reveal?: boolean,
+    fallbackLabel?: string,
   ) => void;
   onNavigatePoint: (
     coordinate: { lat: number; lon: number },
@@ -68,31 +75,220 @@ const emptyFeatures = (): FeatureCollection => ({
   features: [],
 });
 
+type BuildingSelection = {
+  feature: Feature<Polygon>;
+  lookupCoordinate: Coordinate;
+};
+
+function pointInRing(point: { x: number; y: number }, ring: Position[]) {
+  let inside = false;
+  for (
+    let index = 0, previous = ring.length - 1;
+    index < ring.length;
+    index++
+  ) {
+    const currentPoint = ring[index]!;
+    const previousPoint = ring[previous]!;
+    const intersects =
+      currentPoint[1]! > point.y !== previousPoint[1]! > point.y &&
+      point.x <
+        ((previousPoint[0]! - currentPoint[0]!) *
+          (point.y - currentPoint[1]!)) /
+          (previousPoint[1]! - currentPoint[1]!) +
+          currentPoint[0]!;
+    if (intersects) inside = !inside;
+    previous = index;
+  }
+  return inside;
+}
+
+function pointInPolygon(point: Position, rings: Position[][]) {
+  return (
+    Boolean(
+      rings[0] && pointInRing({ x: point[0]!, y: point[1]! }, rings[0]),
+    ) &&
+    !rings
+      .slice(1)
+      .some((ring) => pointInRing({ x: point[0]!, y: point[1]! }, ring))
+  );
+}
+
+function projectedPolygon(map: MapLibreMap, rings: Position[][]): Position[][] {
+  return rings.map((ring) =>
+    ring.map((coordinate) => {
+      const rendered = map.project([coordinate[0]!, coordinate[1]!]);
+      return [rendered.x, rendered.y];
+    }),
+  );
+}
+
+function ringArea(ring: Position[]) {
+  let sum = 0;
+  for (let index = 0; index < ring.length; index += 1) {
+    const current = ring[index]!;
+    const next = ring[(index + 1) % ring.length]!;
+    sum += current[0]! * next[1]! - next[0]! * current[1]!;
+  }
+  return Math.abs(sum / 2);
+}
+
+function ringDistance(point: { x: number; y: number }, ring: Position[]) {
+  let closest = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < ring.length; index += 1) {
+    const start = ring[index]!;
+    const end = ring[(index + 1) % ring.length]!;
+    const dx = end[0]! - start[0]!;
+    const dy = end[1]! - start[1]!;
+    const lengthSquared = dx * dx + dy * dy;
+    const progress =
+      lengthSquared === 0
+        ? 0
+        : Math.max(
+            0,
+            Math.min(
+              1,
+              ((point.x - start[0]!) * dx + (point.y - start[1]!) * dy) /
+                lengthSquared,
+            ),
+          );
+    closest = Math.min(
+      closest,
+      Math.hypot(
+        point.x - (start[0]! + progress * dx),
+        point.y - (start[1]! + progress * dy),
+      ),
+    );
+  }
+  return closest;
+}
+
+function polygonCentroid(ring: Position[]): Coordinate {
+  let twiceArea = 0;
+  let longitude = 0;
+  let latitude = 0;
+  for (let index = 0; index < ring.length; index += 1) {
+    const current = ring[index]!;
+    const next = ring[(index + 1) % ring.length]!;
+    const cross = current[0]! * next[1]! - next[0]! * current[1]!;
+    twiceArea += cross;
+    longitude += (current[0]! + next[0]!) * cross;
+    latitude += (current[1]! + next[1]!) * cross;
+  }
+  if (Math.abs(twiceArea) < 1e-12) {
+    const count = Math.max(1, ring.length);
+    return [
+      ring.reduce((sum, point) => sum + point[0]!, 0) / count,
+      ring.reduce((sum, point) => sum + point[1]!, 0) / count,
+    ];
+  }
+  return [longitude / (3 * twiceArea), latitude / (3 * twiceArea)];
+}
+
 function highlightedBuildingAt(
   map: MapLibreMap,
   point: { x: number; y: number },
-): Feature<Geometry> | null {
-  const match = map
-    .queryRenderedFeatures([point.x, point.y])
-    .find(
-      (feature) =>
-        (feature.geometry.type === "Polygon" ||
-          feature.geometry.type === "MultiPolygon") &&
-        (feature.layer.id.toLowerCase().includes("building") ||
-          feature.sourceLayer === "building" ||
-          Boolean(feature.properties?.building)),
+): BuildingSelection | null {
+  const buildingLayers = (map.getStyle().layers ?? []).filter(
+    (layer) =>
+      (layer.type === "fill-extrusion" || layer.type === "fill") &&
+      (layer.id.toLowerCase().includes("building") ||
+        ("source-layer" in layer && layer["source-layer"] === "building")),
+  );
+  const extrusionLayers = buildingLayers.filter(
+    (layer) => layer.type === "fill-extrusion",
+  );
+  const layerIds = (
+    extrusionLayers.length > 0 ? extrusionLayers : buildingLayers
+  ).map((layer) => layer.id);
+  if (layerIds.length === 0) return null;
+
+  const candidates = map
+    .queryRenderedFeatures([point.x, point.y], { layers: layerIds })
+    .flatMap((feature, hitIndex) => {
+      const polygons =
+        feature.geometry.type === "Polygon"
+          ? [feature.geometry.coordinates]
+          : feature.geometry.type === "MultiPolygon"
+            ? feature.geometry.coordinates
+            : [];
+      return polygons.map((rings) => {
+        const projected = projectedPolygon(map, rings);
+        const contains = pointInPolygon([point.x, point.y], projected);
+        return {
+          feature,
+          hitIndex,
+          rings,
+          contains,
+          distance: contains ? 0 : ringDistance(point, projected[0] ?? []),
+          area: ringArea(projected[0] ?? []),
+        };
+      });
+    })
+    .filter((candidate) => candidate.area > 0)
+    .sort(
+      (left, right) =>
+        Number(right.contains) - Number(left.contains) ||
+        left.distance - right.distance ||
+        left.area - right.area ||
+        left.hitIndex - right.hitIndex,
     );
+  const match = candidates[0];
   if (!match) return null;
+
+  const centroid = polygonCentroid(match.rings[0] ?? []);
+  let lookupCoordinate = centroid;
+  try {
+    const addressFeatures = map.querySourceFeatures(match.feature.source, {
+      sourceLayer: "housenumber",
+    });
+    const addressPoint = addressFeatures
+      .filter(
+        (feature) =>
+          feature.geometry.type === "Point" &&
+          pointInPolygon(feature.geometry.coordinates, match.rings),
+      )
+      .sort((left, right) => {
+        const leftIdMatch = left.id === match.feature.id ? 0 : 1;
+        const rightIdMatch = right.id === match.feature.id ? 0 : 1;
+        if (leftIdMatch !== rightIdMatch) return leftIdMatch - rightIdMatch;
+        const leftPoint =
+          left.geometry.type === "Point" ? left.geometry.coordinates : centroid;
+        const rightPoint =
+          right.geometry.type === "Point"
+            ? right.geometry.coordinates
+            : centroid;
+        return (
+          Math.hypot(leftPoint[0]! - centroid[0], leftPoint[1]! - centroid[1]) -
+          Math.hypot(rightPoint[0]! - centroid[0], rightPoint[1]! - centroid[1])
+        );
+      })[0];
+    if (addressPoint?.geometry.type === "Point") {
+      lookupCoordinate = [
+        addressPoint.geometry.coordinates[0]!,
+        addressPoint.geometry.coordinates[1]!,
+      ];
+    }
+  } catch {
+    // GeoJSON test/demo sources do not expose vector source layers.
+  }
+
   return {
-    type: "Feature",
-    properties: {
-      name: match.properties?.name ?? null,
-      address:
-        match.properties?.address ??
-        match.properties?.["addr:housename"] ??
-        null,
+    lookupCoordinate,
+    feature: {
+      type: "Feature",
+      properties: {
+        ...match.feature.properties,
+        name: match.feature.properties?.name ?? null,
+        address:
+          match.feature.properties?.address ??
+          match.feature.properties?.["addr:housename"] ??
+          null,
+      },
+      geometry: {
+        type: "Polygon",
+        coordinates: structuredClone(match.rings),
+      },
     },
-    geometry: structuredClone(match.geometry),
   };
 }
 
@@ -390,7 +586,7 @@ export function MapCanvas({
   const preserveCameraForRouteRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [heldPoint, setHeldPoint] = useState<Coordinate | null>(null);
-  const [heldBuilding, setHeldBuilding] = useState<Feature<Geometry> | null>(
+  const [heldBuilding, setHeldBuilding] = useState<BuildingSelection | null>(
     null,
   );
   const lastCameraUpdate = useRef(0);
@@ -636,11 +832,14 @@ export function MapCanvas({
       map.stop();
       const coordinate = map.unproject([point.x, point.y]);
       const selected: Coordinate = [coordinate.lng, coordinate.lat];
+      const building = highlightedBuildingAt(map, point);
       setHeldPoint(selected);
-      setHeldBuilding(highlightedBuildingAt(map, point));
+      setHeldBuilding(building);
+      const inspectionCoordinate = building?.lookupCoordinate ?? selected;
       onInspectPointRef.current(
-        { lat: coordinate.lat, lon: coordinate.lng },
+        { lat: inspectionCoordinate[1], lon: inspectionCoordinate[0] },
         false,
+        building ? "Selected building" : undefined,
       );
       if (holdFocusTimer !== null) window.clearTimeout(holdFocusTimer);
       holdFocusTimer = window.setTimeout(() => {
@@ -770,7 +969,30 @@ export function MapCanvas({
           source: "selected-building",
           paint: {
             "fill-color": "#d8f88b",
-            "fill-opacity": 0.48,
+            "fill-opacity": 0.18,
+          },
+        },
+        before,
+      );
+      map.addLayer(
+        {
+          id: "selected-building-extrusion",
+          type: "fill-extrusion",
+          source: "selected-building",
+          paint: {
+            "fill-extrusion-base": [
+              "coalesce",
+              ["to-number", ["get", "render_min_height"]],
+              0,
+            ],
+            "fill-extrusion-color": "#d8f88b",
+            "fill-extrusion-height": [
+              "+",
+              ["coalesce", ["to-number", ["get", "render_height"]], 4],
+              0.8,
+            ],
+            "fill-extrusion-opacity": 0.82,
+            "fill-extrusion-vertical-gradient": true,
           },
         },
         before,
@@ -1060,13 +1282,25 @@ export function MapCanvas({
       | undefined;
     source?.setData(
       heldBuilding
-        ? { type: "FeatureCollection", features: [heldBuilding] }
+        ? { type: "FeatureCollection", features: [heldBuilding.feature] }
         : emptyFeatures(),
     );
     if (containerRef.current) {
       containerRef.current.dataset.selectedBuilding = heldBuilding
         ? "highlighted"
         : "none";
+      containerRef.current.dataset.selectedBuildingRendering = heldBuilding
+        ? "extruded"
+        : "none";
+      containerRef.current.dataset.selectedBuildingParts = heldBuilding
+        ? "1"
+        : "0";
+      containerRef.current.dataset.selectedBuildingName = String(
+        heldBuilding?.feature.properties?.name ?? "",
+      );
+      containerRef.current.dataset.selectedBuildingLookup = heldBuilding
+        ? heldBuilding.lookupCoordinate.join(",")
+        : "";
     }
   }, [heldBuilding, ready]);
 

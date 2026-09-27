@@ -147,6 +147,9 @@ or search`.
 - [x] When the held point intersects a rendered building, highlight that exact
       footprint bright green while keeping the waypoint and radial actions at
       the original pointer location.
+- [x] Select only the smallest exact building footprint, render the highlight
+      on its 3D extrusion, and resolve details from its address/centroid rather
+      than reverse-geocoding the visually displaced facade pixel.
 - [ ] After the held point is anchored, focus it in the center of the visible
       upper map when the sheet is half open; with a minimized sheet, place it
       only slightly above the full viewport center.

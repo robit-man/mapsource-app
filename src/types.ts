@@ -46,6 +46,7 @@ export type InspectionState = {
   coordinate: { lat: number; lon: number };
   place: DiscoveryPlace | null;
   revealed: boolean;
+  fallbackLabel?: string;
   message?: string;
 };
 
