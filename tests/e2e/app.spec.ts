@@ -79,11 +79,39 @@ async function stubApplicationApis(page: Page) {
             displayName: "Forest Park, Portland, Oregon",
             coordinate: { lat: 45.5723, lon: -122.741 },
           };
+    const results = query?.includes("map first")
+      ? [
+          {
+            id: "forest-park",
+            kind: "place",
+            name: "Forest Park",
+            displayName: "Forest Park, Portland, Oregon",
+            coordinate: { lat: 45.5723, lon: -122.741 },
+            distanceMeters: 920,
+          },
+          {
+            id: "lower-macleay",
+            kind: "landmark",
+            name: "Lower Macleay Trailhead",
+            displayName: "Lower Macleay Trailhead, Portland, Oregon",
+            coordinate: { lat: 45.53616, lon: -122.71256 },
+            distanceMeters: 1400,
+          },
+          {
+            id: "pittock",
+            kind: "landmark",
+            name: "Pittock Mansion overlook",
+            displayName: "Pittock Mansion, Portland, Oregon",
+            coordinate: { lat: 45.52521, lon: -122.71627 },
+            distanceMeters: 2100,
+          },
+        ]
+      : [result];
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         schema: "mapsource-lookup.v1",
-        results: [result],
+        results,
       }),
     });
   });
@@ -766,6 +794,65 @@ test("keeps the search spinner circular and evenly inset", async ({ page }) => {
   expect(Math.abs(top - right)).toBeLessThan(1);
 });
 
+test("projects ordered search results onto the map before opening the list", async ({
+  page,
+  context,
+}) => {
+  await page.getByRole("button", { name: "Open search" }).click();
+  await page
+    .getByLabel("Search trailheads, parks, and addresses")
+    .fill("map first");
+
+  await expect(page.locator(".search-map-marker")).toHaveCount(3);
+  await expect(page.getByRole("button", { name: "3 results" })).toBeVisible();
+  await expect(
+    page.getByRole("listbox", { name: "Search results" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Select Forest Park" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Select Lower Macleay Trailhead" }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "3 results" }).click();
+  const list = page.getByRole("listbox", { name: "Search results" });
+  await expect(list).toBeVisible();
+  await expect(list.getByRole("option")).toHaveCount(3);
+  await list
+    .getByRole("option")
+    .filter({ hasText: "Lower Macleay Trailhead" })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Select Lower Macleay Trailhead" }),
+  ).toHaveClass(/is-selected/);
+
+  await page.getByRole("button", { name: "Close results" }).click();
+  await expect(list).toHaveCount(0);
+  await expect(page.locator(".search-map-marker")).toHaveCount(3);
+
+  await page
+    .getByLabel("Search trailheads, parks, and addresses")
+    .press("Escape");
+  await page.getByRole("button", { name: "Select Forest Park" }).click();
+  await page.getByRole("button", { name: "Open search" }).click();
+  await page.getByRole("button", { name: "3 results" }).click();
+  await expect(
+    page.getByRole("option").filter({ hasText: "Forest Park" }),
+  ).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: "Close results" }).click();
+
+  await panMapByTouch(page, context);
+  const searchArea = page.getByRole("button", { name: "Search this area" });
+  await expect(searchArea).toBeVisible();
+  const refreshedSearch = page.waitForRequest((request) =>
+    request.url().includes("/api/search?"),
+  );
+  await searchArea.click();
+  await refreshedSearch;
+  await expect(searchArea).toHaveCount(0);
+});
+
 test("requests orientation with location and follows an absolute heading", async ({
   page,
   context,
@@ -1241,17 +1328,18 @@ test("discovers visible businesses and exposes available actions", async ({
   const marker = page.getByRole("button", { name: "Trail House Cafe" });
   await expect(marker).toBeVisible();
   await marker.click();
-  await expect(page.getByText("Trail House Cafe")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Call" })).toHaveAttribute(
+  const popup = page.getByRole("article");
+  await expect(popup.getByText("Trail House Cafe")).toBeVisible();
+  await expect(popup.getByRole("link", { name: "Call" })).toHaveAttribute(
     "href",
     "tel:+1 503 555 0101",
   );
-  await expect(page.getByRole("link", { name: "Website" })).toHaveAttribute(
+  await expect(popup.getByRole("link", { name: "Website" })).toHaveAttribute(
     "href",
     "https://example.com/trail-house",
   );
   await expect(
-    page.getByRole("link", { name: "OpenStreetMap" }),
+    popup.getByRole("link", { name: "OpenStreetMap" }),
   ).toHaveAttribute("href", "https://www.openstreetmap.org/node/101");
 });
 

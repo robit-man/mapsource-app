@@ -29,6 +29,21 @@ export type SearchResult = {
   distanceMeters?: number;
 };
 
+export type SearchStatus = "idle" | "loading" | "error";
+
+/** A bounded, map-ready UI projection of either lookup or discovery data. */
+export type PresentedSearchResult = {
+  id: string;
+  sourceId: string | null;
+  source: "text" | "discovery";
+  name: string;
+  detail: string;
+  coordinate: { lat: number; lon: number };
+  kind: SearchResult["kind"];
+  category: string | null;
+  distanceMeters: number | null;
+};
+
 export type DiscoveryPlace = {
   id: string;
   name: string | null;

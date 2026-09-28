@@ -25,6 +25,7 @@ import {
   nearestRoutePosition,
   routeDistances,
 } from "./route-utils";
+import { presentDiscoveryPlaces } from "./search-results";
 import type {
   ApiError,
   Coordinate,
@@ -33,9 +34,10 @@ import type {
   MapCameraState,
   MapSurface,
   NavigationStatus,
+  PresentedSearchResult,
   RouteMode,
   RouteResponse,
-  SearchResult,
+  SearchStatus,
   SheetMode,
   SpatialOverlay,
   UserLocationFix,
@@ -148,6 +150,16 @@ export default function App() {
     () => restoredState?.discoveryCategory ?? null,
   );
   const [discoveryPlaces, setDiscoveryPlaces] = useState<DiscoveryPlace[]>([]);
+  const [discoveryStatus, setDiscoveryStatus] = useState<SearchStatus>("idle");
+  const [textSearchResults, setTextSearchResults] = useState<
+    PresentedSearchResult[]
+  >([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedSearchResultId, setSelectedSearchResultId] = useState<
+    string | null
+  >(null);
+  const [searchAreaAvailable, setSearchAreaAvailable] = useState(false);
+  const [searchAreaRevision, setSearchAreaRevision] = useState(0);
   const [inspection, setInspection] = useState<InspectionState | null>(null);
   const [surface, setSurface] = useState<MapSurface>(
     () => restoredState?.surface ?? "mapsource",
@@ -195,6 +207,14 @@ export default function App() {
         ? "railway_station"
         : null;
   const mapDiscoveryCategory = discoveryCategory ?? transportDiscoveryCategory;
+  const categorySearchResults = useMemo(
+    () => presentDiscoveryPlaces(discoveryPlaces),
+    [discoveryPlaces],
+  );
+  const viewStateRef = useRef({ center, viewBounds });
+  useEffect(() => {
+    viewStateRef.current = { center, viewBounds };
+  }, [center, viewBounds]);
   const heldPointDetails = useMemo(() => {
     if (!inspection) return null;
     if (inspection.status === "loading") {
@@ -253,16 +273,18 @@ export default function App() {
 
   useEffect(() => {
     if (!mapDiscoveryCategory) return;
+    const searchedView = viewStateRef.current;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
+      setDiscoveryStatus("loading");
       const params = new URLSearchParams({
         category: mapDiscoveryCategory,
-        lat: String(center.lat),
-        lon: String(center.lon),
-        west: String(viewBounds.west),
-        south: String(viewBounds.south),
-        east: String(viewBounds.east),
-        north: String(viewBounds.north),
+        lat: String(searchedView.center.lat),
+        lon: String(searchedView.center.lon),
+        west: String(searchedView.viewBounds.west),
+        south: String(searchedView.viewBounds.south),
+        east: String(searchedView.viewBounds.east),
+        north: String(searchedView.viewBounds.north),
       });
       fetch(`/api/discover?${params}`, { signal: controller.signal })
         .then(async (response) => {
@@ -275,18 +297,20 @@ export default function App() {
           setDiscoveryPlaces((current) =>
             JSON.stringify(current) === JSON.stringify(next) ? current : next,
           );
+          setDiscoveryStatus("idle");
+          setSearchAreaAvailable(false);
         })
         .catch((error: unknown) => {
           if (error instanceof DOMException && error.name === "AbortError")
             return;
-          setDiscoveryPlaces([]);
+          setDiscoveryStatus("error");
         });
     }, 360);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [center.lat, center.lon, mapDiscoveryCategory, viewBounds]);
+  }, [mapDiscoveryCategory, searchAreaRevision]);
 
   const routeSignature = useMemo(
     () =>
@@ -451,10 +475,8 @@ export default function App() {
     [moveWaypoint, selectedWaypointId],
   );
 
-  const addSearchResult = useCallback((result: SearchResult) => {
-    const lat = result.coordinate?.lat;
-    const lon = result.coordinate?.lon;
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+  const addSearchResult = useCallback((result: PresentedSearchResult) => {
+    const { lat, lon } = result.coordinate;
     const pendingEndpoint = pendingEndpointRef.current;
     if (pendingEndpoint) {
       pendingEndpointRef.current = null;
@@ -462,10 +484,10 @@ export default function App() {
     }
     setWaypoints((current) => {
       const point: Waypoint = {
-        id: result.id ?? newId(),
-        label: result.name ?? result.displayName ?? "New stop",
-        lat: lat!,
-        lon: lon!,
+        id: result.sourceId ?? newId(),
+        label: result.name,
+        lat,
+        lon,
       };
       if (pendingEndpoint) {
         return placeEndpoint(current, pendingEndpoint, point);
@@ -547,6 +569,31 @@ export default function App() {
             message: "Place details are temporarily unavailable.",
           })),
         );
+    },
+    [],
+  );
+
+  const selectSearchResult = useCallback(
+    (result: PresentedSearchResult) => {
+      setSelectedSearchResultId(result.id);
+      if (pendingEndpointRef.current || waypointsRef.current.length > 0) {
+        addSearchResult(result);
+        window.dispatchEvent(new Event("mapsource:search-accepted"));
+        return;
+      }
+      inspectPoint(result.coordinate, true, result.name);
+    },
+    [addSearchResult, inspectPoint],
+  );
+
+  const handleQueryResults = useCallback(
+    (query: string, results: PresentedSearchResult[]) => {
+      setSearchQuery(query);
+      setTextSearchResults(results);
+      setSelectedSearchResultId((selected) =>
+        results.some((result) => result.id === selected) ? selected : null,
+      );
+      if (!query) setSearchAreaAvailable(false);
     },
     [],
   );
@@ -759,11 +806,28 @@ export default function App() {
     }
   }, [updateNavigationFromFix]);
 
+  const handleDiscoverySelect = useCallback(
+    (place: DiscoveryPlace) => {
+      const [result] = presentDiscoveryPlaces([place]);
+      if (!result) return;
+      setSelectedSearchResultId(result.id);
+      inspectPoint(result.coordinate, true, result.name);
+    },
+    [inspectPoint],
+  );
+
+  const handleUserViewportChange = useCallback(() => {
+    if (searchQuery || discoveryCategory) setSearchAreaAvailable(true);
+  }, [discoveryCategory, searchQuery]);
+  const routeSelectionActive =
+    waypoints.length > 0 || Boolean(selectedWaypointId?.startsWith("pending-"));
+
   return (
     <main className="app-shell">
       <MapCanvas
         activeDiscovery={mapDiscoveryCategory}
         discoveryPlaces={discoveryPlaces}
+        onDiscoverySelect={handleDiscoverySelect}
         heldPointDetails={heldPointDetails}
         initialCamera={restoredState?.camera ?? null}
         initialLocation={initialLocation}
@@ -780,9 +844,14 @@ export default function App() {
         onUserTrackingChange={(active) => {
           userLocationActiveRef.current = active;
         }}
+        onUserViewportChange={handleUserViewportChange}
         onWaypointMove={moveWaypoint}
         navigationProgress={navigationProgress}
         route={route}
+        fitSearchResults={!routeSelectionActive}
+        searchResults={discoveryCategory ? [] : textSearchResults}
+        selectedSearchResultId={selectedSearchResultId}
+        onSearchResultSelect={selectSearchResult}
         selectedWaypointId={selectedWaypointId}
         spatialOverlay={spatialLayer?.overlay ?? null}
         spatialOverlayRevision={spatialLayer?.revision ?? 0}
@@ -792,12 +861,31 @@ export default function App() {
 
       <SearchBar
         activeCategory={discoveryCategory}
+        categoryResults={categorySearchResults}
+        categoryStatus={discoveryStatus}
         center={center}
         onCategory={(category) => {
+          if (category && category !== discoveryCategory) {
+            setDiscoveryPlaces([]);
+            setDiscoveryStatus("loading");
+          }
           setDiscoveryCategory(category);
-          if (!category) setDiscoveryPlaces([]);
+          setSelectedSearchResultId(null);
+          setSearchAreaAvailable(false);
+          if (!category) {
+            setDiscoveryPlaces([]);
+            setDiscoveryStatus("idle");
+          }
         }}
-        onSelect={addSearchResult}
+        onQueryResults={handleQueryResults}
+        onSearchArea={() => {
+          setSearchAreaAvailable(false);
+          setSearchAreaRevision((revision) => revision + 1);
+        }}
+        onSelect={selectSearchResult}
+        searchAreaAvailable={searchAreaAvailable}
+        routeSelectionActive={routeSelectionActive}
+        selectedResultId={selectedSearchResultId}
       />
 
       <div className="map-tools">

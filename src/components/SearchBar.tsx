@@ -1,55 +1,128 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DISCOVERY_FILTERS } from "../discovery-categories";
-import type { SearchResult } from "../types";
+import { normalizeSearchResults, resultDistanceLabel } from "../search-results";
+import type { PresentedSearchResult, SearchStatus } from "../types";
 import { usePlaceSearch } from "../use-place-search";
 import { Icon } from "./Icon";
 
 type SearchBarProps = {
   center: { lat: number; lon: number };
-  onSelect: (result: SearchResult) => void;
   activeCategory: string | null;
+  categoryResults: PresentedSearchResult[];
+  categoryStatus: SearchStatus;
+  selectedResultId: string | null;
+  searchAreaAvailable: boolean;
+  routeSelectionActive: boolean;
   onCategory: (category: string | null) => void;
+  onQueryResults: (
+    query: string,
+    results: PresentedSearchResult[],
+    status: SearchStatus,
+  ) => void;
+  onSearchArea: () => void;
+  onSelect: (result: PresentedSearchResult) => void;
 };
 
 export function SearchBar({
   center,
-  onSelect,
   activeCategory,
+  categoryResults,
+  categoryStatus,
+  selectedResultId,
+  searchAreaAvailable,
+  routeSelectionActive,
   onCategory,
+  onQueryResults,
+  onSearchArea,
+  onSelect,
 }: SearchBarProps) {
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [resultsOpen, setResultsOpen] = useState(false);
+  const [searchBias, setSearchBias] = useState(center);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { results, status } = usePlaceSearch(query, center);
+  const disclosureRef = useRef<HTMLButtonElement>(null);
+  const rowRefs = useRef(new Map<string, HTMLButtonElement>());
+  const previousQueryRef = useRef("");
+  const { results, status } = usePlaceSearch(query, searchBias);
+  const textResults = useMemo(() => normalizeSearchResults(results), [results]);
+  const presentedResults = activeCategory ? categoryResults : textResults;
+  const presentedStatus = activeCategory ? categoryStatus : status;
+  const hasIntent = query.trim().length >= 2;
 
-  const choose = (result: SearchResult) => {
-    onSelect(result);
-    setQuery("");
-    setOpen(false);
-    setExpanded(false);
-    onCategory(null);
-    inputRef.current?.blur();
-  };
+  useEffect(() => {
+    onQueryResults(query.trim(), textResults, status);
+  }, [onQueryResults, query, status, textResults]);
 
-  const expand = () => {
-    setExpanded(true);
-    window.requestAnimationFrame(() => inputRef.current?.focus());
+  useEffect(() => {
+    if (previousQueryRef.current !== query) {
+      setResultsOpen(routeSelectionActive && query.trim().length >= 2);
+    }
+    previousQueryRef.current = query;
+  }, [query, routeSelectionActive]);
+
+  useEffect(() => {
+    const acceptRouteSelection = () => {
+      setQuery("");
+      setResultsOpen(false);
+      setExpanded(false);
+      onCategory(null);
+      inputRef.current?.blur();
+    };
+    window.addEventListener("mapsource:search-accepted", acceptRouteSelection);
+    return () =>
+      window.removeEventListener(
+        "mapsource:search-accepted",
+        acceptRouteSelection,
+      );
+  }, [onCategory]);
+
+  useEffect(() => {
+    if (!resultsOpen || !selectedResultId) return;
+    window.requestAnimationFrame(() =>
+      rowRefs.current
+        .get(selectedResultId)
+        ?.scrollIntoView({ block: "nearest" }),
+    );
+  }, [resultsOpen, selectedResultId]);
+
+  const closeResults = () => {
+    setResultsOpen(false);
+    window.requestAnimationFrame(() => disclosureRef.current?.focus());
   };
 
   const collapse = () => {
     setExpanded(false);
-    setOpen(false);
+    setResultsOpen(false);
     inputRef.current?.blur();
   };
 
+  const clear = () => {
+    setQuery("");
+    setResultsOpen(false);
+    onCategory(null);
+    onQueryResults("", [], "idle");
+  };
+
+  const countLabel =
+    presentedStatus === "loading"
+      ? "Searching map"
+      : presentedStatus === "error"
+        ? "Retry search"
+        : presentedResults.length === 0
+          ? "No results"
+          : `${presentedResults.length} ${presentedResults.length === 1 ? "result" : "results"}`;
+
   return (
     <div className={`search-shell ${expanded ? "is-expanded" : ""}`}>
-      <div className={`search-bar ${open ? "is-open" : ""}`}>
+      <div className="search-bar">
         <button
           aria-label="Open search"
           className="search-toggle"
-          onClick={expand}
+          onClick={() => {
+            setExpanded(true);
+            window.requestAnimationFrame(() => inputRef.current?.focus());
+          }}
           type="button"
         >
           <Icon name="search" size={20} />
@@ -61,32 +134,30 @@ export function SearchBar({
           disabled={!expanded}
           onChange={(event) => {
             const nextQuery = event.target.value;
+            if (!query.trim() && nextQuery.trim()) setSearchBias(center);
             setQuery(nextQuery);
-            setOpen(true);
             onCategory(null);
           }}
-          onFocus={() => setOpen(true)}
           onKeyDown={(event) => {
-            if (event.key === "Escape") collapse();
+            if (event.key !== "Escape") return;
+            if (resultsOpen) closeResults();
+            else collapse();
           }}
           placeholder="Search trailheads, parks, addresses"
           spellCheck="false"
           value={query}
         />
-        {status === "loading" && (
+        {status === "loading" && !activeCategory && (
           <span
             aria-label="Searching"
             className="search-spinner search-spinner--bar"
           />
         )}
-        {query && status !== "loading" && (
+        {query && !(status === "loading" && !activeCategory) && (
           <button
             aria-label="Clear search"
             className="icon-button compact"
-            onClick={() => {
-              setQuery("");
-              onCategory(null);
-            }}
+            onClick={clear}
             type="button"
           >
             <Icon name="close" size={16} />
@@ -103,6 +174,7 @@ export function SearchBar({
           </button>
         )}
       </div>
+
       {expanded && (
         <div className="quick-filters" aria-label="Explore nearby">
           {DISCOVERY_FILTERS.map((filter) => (
@@ -113,7 +185,8 @@ export function SearchBar({
               key={filter.id}
               onClick={() => {
                 setQuery(filter.query);
-                setOpen(true);
+                setSearchBias(center);
+                setResultsOpen(false);
                 onCategory(filter.id);
                 inputRef.current?.focus();
               }}
@@ -125,49 +198,97 @@ export function SearchBar({
           ))}
         </div>
       )}
-      {expanded && open && query.trim().length >= 2 && (
-        <div className="search-results" role="listbox">
-          <div className="search-results__meta">
-            <span>
-              {status === "loading"
-                ? "Finding nearby places"
-                : `${results.length} places`}
-            </span>
-            <span>Mapsource local search</span>
-          </div>
-          {status === "error" && (
-            <p className="search-message">Search is unavailable. Try again.</p>
-          )}
-          {status === "idle" && results.length === 0 && (
-            <p className="search-message">No matching places found.</p>
-          )}
-          {results.map((result, index) => (
+
+      {expanded && hasIntent && (
+        <div className="search-result-controls">
+          <button
+            ref={disclosureRef}
+            aria-controls="map-search-results"
+            aria-expanded={resultsOpen}
+            className="search-results-disclosure"
+            disabled={
+              presentedStatus === "loading" && presentedResults.length === 0
+            }
+            onClick={() => setResultsOpen((value) => !value)}
+            type="button"
+          >
+            {presentedStatus === "loading" && (
+              <span className="search-spinner" />
+            )}
+            <span>{countLabel}</span>
+            <Icon name={resultsOpen ? "chevronUp" : "chevronDown"} size={15} />
+          </button>
+          {searchAreaAvailable && (
             <button
-              className="search-result"
-              key={result.id ?? `${result.displayName}-${index}`}
-              onClick={() => choose(result)}
-              role="option"
+              className="search-area-button"
+              onClick={() => {
+                setSearchBias(center);
+                onSearchArea();
+              }}
               type="button"
             >
-              <span className="result-icon">
-                <Icon
-                  name={result.kind === "place" ? "mountain" : "pin"}
-                  size={17}
-                />
-              </span>
-              <span className="result-copy">
-                <strong>
-                  {result.name ?? result.displayName ?? "Unnamed place"}
-                </strong>
-                <small>
-                  {result.displayName ?? result.category ?? result.kind}
-                </small>
-              </span>
-              <span className="result-action">
-                <Icon name="plus" size={17} />
-              </span>
+              Search this area
             </button>
-          ))}
+          )}
+        </div>
+      )}
+
+      {expanded && hasIntent && resultsOpen && (
+        <div
+          aria-label="Search results"
+          className="search-results"
+          id="map-search-results"
+          role="listbox"
+        >
+          <div className="search-results__meta">
+            <span>{countLabel}</span>
+            <button
+              aria-label="Close results"
+              onClick={closeResults}
+              type="button"
+            >
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+          {presentedStatus === "error" && (
+            <p className="search-message">Search is unavailable. Try again.</p>
+          )}
+          {presentedStatus === "idle" && presentedResults.length === 0 && (
+            <p className="search-message">No matching places found here.</p>
+          )}
+          {presentedResults.map((result) => {
+            const distance = resultDistanceLabel(result.distanceMeters);
+            return (
+              <button
+                ref={(element) => {
+                  if (element) rowRefs.current.set(result.id, element);
+                  else rowRefs.current.delete(result.id);
+                }}
+                aria-selected={selectedResultId === result.id}
+                className={`search-result ${selectedResultId === result.id ? "is-selected" : ""}`}
+                key={result.id}
+                onClick={() => onSelect(result)}
+                role="option"
+                type="button"
+              >
+                <span className="result-icon">
+                  <Icon
+                    name={result.kind === "place" ? "mountain" : "pin"}
+                    size={17}
+                  />
+                </span>
+                <span className="result-copy">
+                  <strong>{result.name}</strong>
+                  <small>
+                    {[result.detail, distance].filter(Boolean).join(" · ")}
+                  </small>
+                </span>
+                <span className="result-action">
+                  <Icon name="arrow" size={17} />
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

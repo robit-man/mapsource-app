@@ -43,6 +43,7 @@ import type {
   DiscoveryPlace,
   MapCameraState,
   MapSurface,
+  PresentedSearchResult,
   RouteMode,
   RouteResponse,
   SpatialOverlay,
@@ -88,6 +89,12 @@ type MapCanvasProps = {
   discoveryPlaces: DiscoveryPlace[];
   activeDiscovery: string | null;
   onBoundsChange: (bounds: ViewBounds) => void;
+  searchResults: PresentedSearchResult[];
+  fitSearchResults: boolean;
+  selectedSearchResultId: string | null;
+  onSearchResultSelect: (result: PresentedSearchResult) => void;
+  onDiscoverySelect: (place: DiscoveryPlace) => void;
+  onUserViewportChange: () => void;
 };
 
 const emptyLine = (): Feature<LineString> => ({
@@ -611,14 +618,22 @@ export function MapCanvas({
   discoveryPlaces,
   activeDiscovery,
   onBoundsChange,
+  searchResults,
+  fitSearchResults,
+  selectedSearchResultId,
+  onSearchResultSelect,
+  onDiscoverySelect,
+  onUserViewportChange,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
   const businessMarkersRef = useRef<Marker[]>([]);
+  const searchMarkersRef = useRef<Marker[]>([]);
   const businessPopupRef = useRef<Popup | null>(null);
   const intermediateMarkerRef = useRef<Marker | null>(null);
   const focusedDiscoveryRef = useRef<string | null>(null);
+  const focusedSearchRef = useRef<string | null>(null);
   const selectedRef = useRef(selectedWaypointId);
   const onMapPickRef = useRef(onMapPick);
   const onAddIntermediateRef = useRef(onAddIntermediate);
@@ -629,6 +644,7 @@ export function MapCanvas({
   const onCenterChangeRef = useRef(onCenterChange);
   const onCameraChangeRef = useRef(onCameraChange);
   const onBoundsChangeRef = useRef(onBoundsChange);
+  const onUserViewportChangeRef = useRef(onUserViewportChange);
   const surfaceRef = useRef(surface);
   const modeRef = useRef(mode);
   const routeRef = useRef(route);
@@ -681,6 +697,7 @@ export function MapCanvas({
     onCenterChangeRef.current = onCenterChange;
     onCameraChangeRef.current = onCameraChange;
     onBoundsChangeRef.current = onBoundsChange;
+    onUserViewportChangeRef.current = onUserViewportChange;
     surfaceRef.current = surface;
     modeRef.current = mode;
     routeRef.current = route;
@@ -697,6 +714,7 @@ export function MapCanvas({
     onNavigatePoint,
     onUserLocation,
     onUserTrackingChange,
+    onUserViewportChange,
     mode,
     navigationProgress,
     route,
@@ -851,6 +869,7 @@ export function MapCanvas({
     let attributionAdded = false;
     let userFocusSequence = 0;
     let userZooming = false;
+    let userViewportGesture = false;
     let userAdjustingCamera = false;
     let preserveMultiTouchFollow = false;
     let preserveZoomFollow = false;
@@ -1131,6 +1150,7 @@ export function MapCanvas({
     const handleZoomStart = (event: { originalEvent?: unknown }) => {
       if (!event.originalEvent) return;
       userCameraInteractedRef.current = true;
+      userViewportGesture = true;
       userZooming = true;
       userFocusSequence += 1;
     };
@@ -1158,6 +1178,7 @@ export function MapCanvas({
         return;
       }
       userCameraInteractedRef.current = true;
+      userViewportGesture = true;
       if (userTrackingRef.current) setCameraFollowing(false);
     };
     const handleCameraAdjustmentStart = (event: {
@@ -1165,6 +1186,7 @@ export function MapCanvas({
     }) => {
       if (!event.originalEvent) return;
       userCameraInteractedRef.current = true;
+      userViewportGesture = true;
       userAdjustingCamera = true;
     };
     const handleCameraAdjustmentEnd = () => {
@@ -2349,6 +2371,10 @@ export function MapCanvas({
         east: bounds.getEast(),
         north: bounds.getNorth(),
       });
+      if (userViewportGesture) {
+        userViewportGesture = false;
+        onUserViewportChangeRef.current();
+      }
     });
 
     return () => {
@@ -2636,6 +2662,95 @@ export function MapCanvas({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
+    searchMarkersRef.current.forEach((marker) => marker.remove());
+    searchMarkersRef.current = [];
+    if (searchResults.length === 0) {
+      focusedSearchRef.current = null;
+      return;
+    }
+    const points: Coordinate[] = [];
+    for (const result of searchResults) {
+      const coordinate: Coordinate = [
+        result.coordinate.lon,
+        result.coordinate.lat,
+      ];
+      points.push(coordinate);
+      const element = document.createElement("button");
+      element.type = "button";
+      element.className = `search-map-marker ${selectedSearchResultId === result.id ? "is-selected" : ""}`;
+      element.ariaLabel = `Select ${result.name}`;
+      element.dataset.resultId = result.id;
+      const icon = document.createElement("span");
+      icon.className = "search-map-marker__icon";
+      appendSvg(
+        icon,
+        businessIconPaths[result.category ?? ""] ??
+          (result.kind === "place"
+            ? businessIconPaths.park!
+            : intermediateIconPaths.origin),
+      );
+      const label = document.createElement("span");
+      label.className = "search-map-marker__label";
+      label.textContent = result.name;
+      element.append(icon, label);
+      element.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onSearchResultSelect(result);
+      });
+      searchMarkersRef.current.push(
+        new MapLibreMarker({ element, anchor: "bottom" })
+          .setLngLat(coordinate)
+          .addTo(map),
+      );
+    }
+    const signature = searchResults.map((result) => result.id).join("|");
+    if (
+      fitSearchResults &&
+      points.length > 0 &&
+      focusedSearchRef.current !== signature
+    ) {
+      const bounds = points.reduce(
+        (value, coordinate) => value.extend(coordinate),
+        new LngLatBounds(points[0]!, points[0]!),
+      );
+      map.fitBounds(bounds, {
+        padding: visibleMapPadding(),
+        maxZoom: 14.5,
+        pitch: map.getPitch(),
+        bearing: map.getBearing(),
+        duration: 720,
+        essential: true,
+      });
+      focusedSearchRef.current = signature;
+    } else if (selectedSearchResultId) {
+      const selected = searchResults.find(
+        (result) => result.id === selectedSearchResultId,
+      );
+      if (selected) {
+        map.easeTo({
+          center: [selected.coordinate.lon, selected.coordinate.lat],
+          offset: visibleMapFocusTarget(map).offset,
+          duration: 420,
+          essential: true,
+        });
+      }
+    }
+    return () => {
+      searchMarkersRef.current.forEach((marker) => marker.remove());
+      searchMarkersRef.current = [];
+    };
+  }, [
+    fitSearchResults,
+    onSearchResultSelect,
+    ready,
+    searchResults,
+    selectedSearchResultId,
+  ]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
     businessMarkersRef.current.forEach((marker) => marker.remove());
     businessMarkersRef.current = [];
     businessPopupRef.current?.remove();
@@ -2656,15 +2771,23 @@ export function MapCanvas({
       element.type = "button";
       element.className = "business-marker";
       element.ariaLabel = place.name ?? `Open ${activeDiscovery} details`;
+      element.dataset.resultId = `discovery:${place.id}`;
+      const icon = document.createElement("span");
+      icon.className = "business-marker__icon";
       appendSvg(
-        element,
+        icon,
         businessIconPaths[activeDiscovery] ?? businessIconPaths.shop!,
       );
+      const label = document.createElement("span");
+      label.className = "business-marker__label";
+      label.textContent = place.name ?? place.address.street ?? activeDiscovery;
+      element.append(icon, label);
       const marker = new MapLibreMarker({ element })
         .setLngLat(coordinate)
         .addTo(map);
       element.addEventListener("click", (event) => {
         event.stopPropagation();
+        onDiscoverySelect(place);
         businessPopupRef.current?.remove();
         businessMarkersRef.current.forEach((item) =>
           item.getElement().classList.toggle("is-active", item === marker),
@@ -2709,7 +2832,18 @@ export function MapCanvas({
       businessPopupRef.current?.remove();
       businessPopupRef.current = null;
     };
-  }, [activeDiscovery, discoveryPlaces, ready]);
+  }, [activeDiscovery, discoveryPlaces, onDiscoverySelect, ready]);
+
+  useEffect(() => {
+    for (const marker of businessMarkersRef.current) {
+      marker
+        .getElement()
+        .classList.toggle(
+          "is-active",
+          marker.getElement().dataset.resultId === selectedSearchResultId,
+        );
+    }
+  }, [selectedSearchResultId]);
 
   useEffect(() => {
     const map = mapRef.current;

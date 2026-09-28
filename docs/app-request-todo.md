@@ -338,6 +338,23 @@ location` origin actions; destination shows `Select on map or search`.
 - [x] APP-111 Rehydrate spatial result overlays after vector style changes,
       fit them into the visible map region, and render polygon, line, and point
       outputs with Mapsource styling.
+- [x] APP-112 Project each ordered, coordinate-valid text-search result onto
+      the map with a stable marker ID and readable place label; keep invalid or
+      out-of-range coordinates out of the map instead of inventing a location.
+- [x] APP-113 Keep the ordered result list collapsed behind a live `N results`
+      control. Open it as a bounded map overlay, preserve results when it
+      closes, and synchronize selection in both directions between rows and
+      markers.
+- [x] APP-114 Put category-discovery names beside their map icons, reuse those
+      same places in the explicit result list, and preserve useful address and
+      distance context without exposing raw API objects.
+- [x] APP-115 Stop refetching category discovery after every camera update.
+      Retain the prior result set and expose `Search this area` only after a
+      user-originated pan, zoom, rotation, or pitch change; programmatic route,
+      result, style, and location-follow camera moves must not trigger it.
+- [x] APP-116 Keep ordinary search selection as place inspection. Only convert
+      a selected result into a route waypoint when the route planner has an
+      explicit pending origin or destination.
 
 ## Release evidence required before closing in-progress work
 
@@ -355,3 +372,7 @@ location` origin actions; destination shows `Select on map or search`.
       Actions release-gate run `36334870014` completed successfully.
 - [ ] TODO-VERIFY-008 Confirm the corrected pinch and heading behavior on the
       reporting physical handset after this release reaches the public origin.
+- [x] TODO-VERIFY-009 Run the map-first search Playwright scenario on desktop
+      and 360px mobile after the implementation patch is applied in this repo;
+      verify map-first rendering, opt-in list opening, synchronized selection,
+      close-without-clear, `Search this area`, and style-switch retention.

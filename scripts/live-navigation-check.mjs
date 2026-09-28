@@ -129,7 +129,10 @@ try {
   await expect(map).toHaveAttribute("data-user-tracking", "active");
   await expect(map).toHaveAttribute("data-camera-following", "active");
 
-  await page.getByRole("button", { name: "Open search" }).click();
+  await page
+    .locator('.empty-stop-row[data-route-role="destination"]')
+    .getByRole("button", { name: "Select on map or search" })
+    .click();
   await page
     .getByLabel("Search trailheads, parks, and addresses")
     .fill("Pittock Mansion");
