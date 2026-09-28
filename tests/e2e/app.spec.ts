@@ -157,6 +157,86 @@ async function stubApplicationApis(page: Page) {
       }),
     });
   });
+  await page.route("**/api/capabilities", async (route) => {
+    const categories = [
+      "discovery",
+      "navigation",
+      "terrain",
+      "compute",
+      "cartography",
+      "delivery",
+      "meta",
+      "account",
+    ];
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        total: 61,
+        groups: categories.map((category, index) => ({
+          category,
+          label: `${category[0]!.toUpperCase()}${category.slice(1)}`,
+          operations: [
+            {
+              id: `operation-${index}`,
+              category,
+              method: index % 2 ? "POST" : "GET",
+              path: `/api/${category}`,
+              summary: `${category} capability`,
+              description: `Live ${category} service from the Mapsource contract.`,
+              access: "authenticated",
+            },
+          ],
+        })),
+      }),
+    });
+  });
+  await page.route("**/api/spatial/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ status: "ready", services: [] }),
+    });
+  });
+  await page.route("**/api/spatial/isochrone", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        tool: "isochrone",
+        title: "20-minute reach",
+        summary: "Three live travel-time bands from the map center.",
+        stats: [
+          { label: "Bands", value: "7m · 13m · 20m" },
+          { label: "Polygons", value: "1" },
+          { label: "Compute", value: "1 sec" },
+        ],
+        overlay: {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              properties: {
+                mapsourceKind: "isochrone",
+                mapsourceColor: "#d8ed9d",
+                mapsourceOpacity: 0.2,
+              },
+              geometry: {
+                type: "Polygon",
+                coordinates: [
+                  [
+                    [-122.74, 45.51],
+                    [-122.68, 45.51],
+                    [-122.68, 45.56],
+                    [-122.74, 45.56],
+                    [-122.74, 45.51],
+                  ],
+                ],
+              },
+            },
+          ],
+        },
+        generatedAt: "2026-09-27T00:00:00.000Z",
+      }),
+    });
+  });
   await page.route("**/map/style.json*", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -443,10 +523,36 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator(".brand-mark")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Open search" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Map layers" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Mapsource spatial tools" }),
+  ).toBeVisible();
   await expect(page.locator(".maplibregl-ctrl-attrib")).not.toHaveClass(
     /maplibregl-compact-show/,
   );
   await expect(page.locator(".maplibregl-ctrl-attrib")).toBeVisible();
+});
+
+test("integrates live spatial tools and the complete SDK capability catalog", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Mapsource spatial tools" }).click();
+  const tools = page.getByRole("region", { name: "Mapsource spatial tools" });
+  await expect(tools.getByText("Use the whole spatial stack")).toBeVisible();
+  await expect(tools.getByText("Live", { exact: true })).toBeVisible();
+
+  await tools.getByRole("button", { name: "Draw reach" }).click();
+  await expect(tools.getByText("20-minute reach")).toBeVisible();
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-spatial-feature-count",
+    "1",
+  );
+
+  await tools.getByRole("button", { name: "All APIs" }).click();
+  await expect(tools.getByText("61")).toBeVisible();
+  await expect(
+    tools.getByText("published operations across 8 service families"),
+  ).toBeVisible();
+  await expect(tools.locator(".capability-catalog details")).toHaveCount(8);
 });
 
 test("starts without a placeholder route or automatic route request", async ({

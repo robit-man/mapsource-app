@@ -112,6 +112,103 @@ for (const mode of ["walk", "bike", "car", "bus", "train"]) {
   );
 }
 
+const capabilityResponse = await fetch(`${origin}/api/capabilities`, {
+  signal: AbortSignal.timeout(10_000),
+});
+if (!capabilityResponse.ok) {
+  throw new Error(`/api/capabilities returned ${capabilityResponse.status}`);
+}
+const capabilities = await capabilityResponse.json();
+const capabilityCategories = new Set(
+  (capabilities?.groups ?? []).map((group) => group.category),
+);
+for (const category of [
+  "discovery",
+  "navigation",
+  "terrain",
+  "compute",
+  "cartography",
+  "delivery",
+  "meta",
+  "account",
+]) {
+  if (!capabilityCategories.has(category)) {
+    throw new Error(`/api/capabilities omitted ${category}`);
+  }
+}
+if (!Number.isInteger(capabilities?.total) || capabilities.total < 50) {
+  throw new Error("/api/capabilities returned an incomplete SDK catalog");
+}
+process.stdout.write(
+  `/api/capabilities ${capabilityResponse.status} ${capabilities.total} operations\n`,
+);
+
+const spatialInput = {
+  center: { lat: 45.531, lon: -122.716 },
+  mode: "walk",
+  minutes: 20,
+  radiusMeters: 750,
+  category: "cafe",
+  waypoints: [
+    { lat: 45.53616, lon: -122.71256, label: "Lower Macleay" },
+    { lat: 45.531, lon: -122.716, label: "Midpoint" },
+    { lat: 45.52521, lon: -122.71627, label: "Pittock" },
+  ],
+  route: [
+    [-122.71256, 45.53616],
+    [-122.7141, 45.532],
+    [-122.71627, 45.52521],
+  ],
+};
+
+for (const tool of [
+  "elevation",
+  "isochrone",
+  "matrix",
+  "snap",
+  "optimize",
+  "match",
+  "analyze",
+  "overpass",
+  "pipeline",
+  "contours",
+]) {
+  const started = performance.now();
+  const response = await fetch(`${origin}/api/spatial/${tool}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(spatialInput),
+    signal: AbortSignal.timeout(70_000),
+  });
+  if (!response.ok) {
+    throw new Error(`/api/spatial/${tool} returned ${response.status}`);
+  }
+  const body = await response.json();
+  if (body?.tool !== tool || !body?.title || !Array.isArray(body?.stats)) {
+    throw new Error(`/api/spatial/${tool} returned an invalid result`);
+  }
+  process.stdout.write(
+    `/api/spatial/${tool} ${response.status} ${Math.round(performance.now() - started)}ms\n`,
+  );
+}
+
+const renderResponse = await fetch(`${origin}/api/spatial/static-map`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ ...spatialInput, surface: "dark" }),
+  signal: AbortSignal.timeout(70_000),
+});
+if (!renderResponse.ok) {
+  throw new Error(`/api/spatial/static-map returned ${renderResponse.status}`);
+}
+const renderBytes = (await renderResponse.arrayBuffer()).byteLength;
+if (renderBytes < 2_048) {
+  throw new Error("/api/spatial/static-map returned too few bytes");
+}
+process.stdout.write(
+  `/api/spatial/static-map ${renderResponse.status} ${renderBytes} bytes\n`,
+);
+
 const satelliteStarted = performance.now();
 const satelliteResponse = await fetch(`${origin}/map/satellite/5/5/11.jpg`, {
   signal: AbortSignal.timeout(10_000),

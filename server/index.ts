@@ -4,13 +4,23 @@ import { resolve } from "node:path";
 import Fastify, { type FastifyReply } from "fastify";
 import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
+import type { Geometry } from "geojson";
 import {
+  allOperations,
   createClient,
   toMapsourceError,
   type MapsourceApiClient,
 } from "mapsource";
+import { buildCapabilityCatalog } from "../src/capability-catalog.js";
 import { addHouseNumberLayers } from "../src/map-style.js";
 import { rankSearchForRegion } from "../src/regional-search.js";
+import type {
+  Coordinate,
+  RouteMode,
+  SpatialOverlay,
+  SpatialToolId,
+  SpatialToolResult,
+} from "../src/types.js";
 
 const app = Fastify({
   logger: true,
@@ -35,6 +45,15 @@ type RouteInput = {
   waypoints?: WaypointInput[];
   mode?: "walk" | "bike" | "car" | "bus" | "train";
 };
+type SpatialInput = {
+  center?: { lat?: number; lon?: number };
+  waypoints?: WaypointInput[];
+  route?: Coordinate[];
+  mode?: RouteMode;
+  minutes?: number;
+  radiusMeters?: number;
+  category?: string;
+};
 
 const discoveryCategories = new Set([
   "restaurant",
@@ -48,6 +67,76 @@ const discoveryCategories = new Set([
   "transit_stop",
   "railway_station",
 ]);
+
+const spatialTools = new Set<SpatialToolId>([
+  "isochrone",
+  "matrix",
+  "optimize",
+  "snap",
+  "match",
+  "analyze",
+  "pipeline",
+  "overpass",
+  "elevation",
+  "contours",
+]);
+
+function costingForMode(mode: RouteMode | undefined) {
+  return mode === "bike"
+    ? "bicycle"
+    : mode === "car"
+      ? "auto"
+      : mode === "bus" || mode === "train"
+        ? "bus"
+        : "pedestrian";
+}
+
+function durationLabel(seconds: number | null | undefined) {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return "—";
+  if (seconds < 60) return `${Math.round(seconds)} sec`;
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60
+    ? `${minutes} min`
+    : `${Math.floor(minutes / 60)} hr ${minutes % 60} min`;
+}
+
+function distanceLabel(kilometers: number | null | undefined) {
+  return typeof kilometers === "number" && Number.isFinite(kilometers)
+    ? `${kilometers.toFixed(kilometers < 10 ? 1 : 0)} km`
+    : "—";
+}
+
+function overlay(features: SpatialOverlay["features"]): SpatialOverlay {
+  return { type: "FeatureCollection", features };
+}
+
+function pointFeature(
+  coordinate: { lat: number; lon: number },
+  properties: Record<string, unknown>,
+): SpatialOverlay["features"][number] {
+  return {
+    type: "Feature",
+    properties,
+    geometry: { type: "Point", coordinates: [coordinate.lon, coordinate.lat] },
+  };
+}
+
+function spatialResult(
+  tool: SpatialToolId,
+  title: string,
+  summary: string,
+  stats: SpatialToolResult["stats"],
+  options: Pick<SpatialToolResult, "overlay" | "optimizedOrder"> = {},
+): SpatialToolResult {
+  return {
+    tool,
+    title,
+    summary,
+    stats,
+    generatedAt: new Date().toISOString(),
+    ...options,
+  };
+}
 
 let keyPromise: Promise<string> | undefined;
 let clientPromise: Promise<MapsourceApiClient> | undefined;
@@ -63,6 +152,10 @@ function finiteCoordinate(lat: unknown, lon: unknown): lat is number {
     lon >= -180 &&
     lon <= 180
   );
+}
+
+function coordinatePair(lat: unknown, lon: unknown) {
+  return finiteCoordinate(lat, lon) ? { lat, lon: lon as number } : null;
 }
 
 async function resolveApiKey(): Promise<string> {
@@ -680,6 +773,720 @@ app.post<{ Body: RouteInput }>(
       return apiFailure(reply, result.response.status, result.error);
     reply.header("cache-control", "no-store");
     return result.data;
+  },
+);
+
+app.get(
+  "/api/capabilities",
+  { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+  async (_request, reply) => {
+    reply.header("cache-control", "public, max-age=300");
+    return {
+      ...buildCapabilityCatalog(allOperations),
+      documentation: "https://mapsource.io/docs/reference",
+      sdk: "npm install mapsource",
+    };
+  },
+);
+
+app.get(
+  "/api/spatial/status",
+  { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+  async (_request, reply) => {
+    const client = await mapsourceClient();
+    const result = await client.GET("/api/status");
+    if (result.error)
+      return apiFailure(reply, result.response.status, result.error);
+    reply.header("cache-control", "private, max-age=20");
+    return result.data;
+  },
+);
+
+app.post<{
+  Params: { tool: string };
+  Body: SpatialInput;
+}>(
+  "/api/spatial/:tool",
+  { config: { rateLimit: { max: 24, timeWindow: "1 minute" } } },
+  async (request, reply) => {
+    if (!spatialTools.has(request.params.tool as SpatialToolId)) {
+      return reply.code(404).send({
+        error: { code: "NOT_FOUND", message: "Unknown spatial tool." },
+      });
+    }
+    const tool = request.params.tool as SpatialToolId;
+    const body = request.body ?? {};
+    const center = body.center;
+    const centerPoint = coordinatePair(center?.lat, center?.lon);
+    const hasCenter = centerPoint !== null;
+    const points = (body.waypoints ?? []).filter((point) =>
+      finiteCoordinate(point?.lat, point?.lon),
+    );
+    const locations = points.map(({ lat, lon }) => ({ lat, lon }));
+    const route = (body.route ?? []).filter(
+      (coordinate): coordinate is Coordinate =>
+        Array.isArray(coordinate) &&
+        coordinate.length >= 2 &&
+        finiteCoordinate(coordinate[1], coordinate[0]),
+    );
+    const costing = costingForMode(body.mode);
+    const client = await mapsourceClient();
+    const badRequest = (message: string) =>
+      reply.code(400).send({
+        error: { code: "BAD_REQUEST", message },
+      });
+
+    if (tool === "isochrone") {
+      if (!hasCenter) return badRequest("A valid map center is required.");
+      const minutes = Math.max(5, Math.min(60, Math.round(body.minutes ?? 20)));
+      const contours = [
+        Math.max(5, Math.round(minutes / 3)),
+        Math.max(5, Math.round((minutes * 2) / 3)),
+        minutes,
+      ].filter((value, index, values) => values.indexOf(value) === index);
+      const result = await client.POST("/api/isochrone", {
+        body: {
+          lat: centerPoint!.lat,
+          lon: centerPoint!.lon,
+          costing,
+          contours,
+        },
+      });
+      if (result.error)
+        return apiFailure(reply, result.response.status, result.error);
+      const data = result.data as {
+        features?: SpatialOverlay["features"];
+        meta?: { computeMs?: number };
+      };
+      const colors = ["#506a55", "#93a878", "#d8ed9d"];
+      const features = (data.features ?? []).map((feature, index) => ({
+        ...feature,
+        properties: {
+          ...(feature.properties ?? {}),
+          mapsourceKind: "isochrone",
+          mapsourceColor: colors[index % colors.length],
+          mapsourceOpacity: 0.13 + index * 0.055,
+        },
+      }));
+      return spatialResult(
+        tool,
+        `${minutes}-minute reach`,
+        `See how far ${body.mode ?? "walk"} travel reaches from the map center across ${contours.length} time bands.`,
+        [
+          {
+            label: "Bands",
+            value: contours.map((value) => `${value}m`).join(" · "),
+          },
+          { label: "Polygons", value: String(features.length) },
+          {
+            label: "Compute",
+            value: durationLabel((data.meta?.computeMs ?? 0) / 1_000),
+          },
+        ],
+        { overlay: overlay(features) },
+      );
+    }
+
+    if (tool === "matrix") {
+      if (points.length < 2)
+        return badRequest("Add at least two stops to compare travel times.");
+      const result = await client.POST("/api/matrix", {
+        body: { sources: locations, costing },
+      });
+      if (result.error)
+        return apiFailure(reply, result.response.status, result.error);
+      const data = result.data as {
+        durationSeconds?: Array<Array<number | null>>;
+        distanceKm?: Array<Array<number | null>>;
+        pairs?: unknown[];
+      };
+      const durations = (data.durationSeconds ?? [])
+        .flat()
+        .filter(
+          (value): value is number =>
+            typeof value === "number" && value > 0 && Number.isFinite(value),
+        );
+      const distances = (data.distanceKm ?? [])
+        .flat()
+        .filter(
+          (value): value is number =>
+            typeof value === "number" && value > 0 && Number.isFinite(value),
+        );
+      return spatialResult(
+        tool,
+        "Stop travel matrix",
+        `Compared every route-planner stop against every other stop using the ${costing} network.`,
+        [
+          {
+            label: "Pairs",
+            value: String(data.pairs?.length ?? durations.length),
+          },
+          { label: "Fastest", value: durationLabel(Math.min(...durations)) },
+          { label: "Longest", value: distanceLabel(Math.max(...distances)) },
+        ],
+        {
+          overlay: overlay(
+            points.map((point, index) =>
+              pointFeature(point, {
+                mapsourceKind: "matrix",
+                mapsourceLabel:
+                  index === 0
+                    ? "A"
+                    : index === points.length - 1
+                      ? "B"
+                      : String(index),
+              }),
+            ),
+          ),
+        },
+      );
+    }
+
+    if (tool === "optimize") {
+      if (points.length < 3)
+        return badRequest("Add at least three stops to optimize their order.");
+      const result = await client.POST("/api/optimize", {
+        body: { locations, costing },
+      });
+      if (result.error)
+        return apiFailure(reply, result.response.status, result.error);
+      const data = result.data as {
+        order?: number[];
+        summary?: { distanceKm?: number; durationSeconds?: number };
+        geometry?: { type: "LineString"; coordinates: Coordinate[] };
+      };
+      const routeFeature: SpatialOverlay["features"][number] | undefined =
+        data.geometry
+          ? {
+              type: "Feature",
+              properties: {
+                mapsourceKind: "optimized",
+                mapsourceColor: "#d8ed9d",
+              },
+              geometry: data.geometry,
+            }
+          : undefined;
+      return spatialResult(
+        tool,
+        "Optimized stop order",
+        "The first and last stops stay fixed while Mapsource solves the most efficient order between them.",
+        [
+          {
+            label: "Order",
+            value:
+              (data.order ?? []).map((index) => index + 1).join(" → ") || "—",
+          },
+          { label: "Distance", value: distanceLabel(data.summary?.distanceKm) },
+          {
+            label: "Time",
+            value: durationLabel(data.summary?.durationSeconds),
+          },
+        ],
+        {
+          ...(routeFeature ? { overlay: overlay([routeFeature]) } : {}),
+          optimizedOrder: data.order ?? [],
+        },
+      );
+    }
+
+    if (tool === "snap") {
+      if (points.length < 1)
+        return badRequest("Add a stop to snap it to the travel network.");
+      const result = await client.POST("/api/snap", {
+        body: { locations, costing },
+      });
+      if (result.error)
+        return apiFailure(reply, result.response.status, result.error);
+      const data = result.data as {
+        locations?: Array<{
+          requested?: { lat?: number; lon?: number };
+          snapped?: { lat?: number; lon?: number } | null;
+          matched?: boolean;
+          offsetMeters?: number | null;
+          name?: string | null;
+        }>;
+      };
+      const snapLocations = data.locations ?? [];
+      const matched = snapLocations.filter((location) => location.matched);
+      const offsets = matched
+        .map((location) => location.offsetMeters)
+        .filter((value): value is number => typeof value === "number");
+      const features = snapLocations.flatMap((location, index) => {
+        const snapped = coordinatePair(
+          location.snapped?.lat,
+          location.snapped?.lon,
+        );
+        if (!snapped) return [];
+        const values: SpatialOverlay["features"] = [
+          pointFeature(snapped, {
+            mapsourceKind: "snapped",
+            mapsourceLabel: location.name ?? `Stop ${index + 1}`,
+          }),
+        ];
+        const requested = coordinatePair(
+          location.requested?.lat,
+          location.requested?.lon,
+        );
+        if (requested) {
+          values.push({
+            type: "Feature",
+            properties: {
+              mapsourceKind: "connector",
+              mapsourceColor: "#93a878",
+            },
+            geometry: {
+              type: "LineString",
+              coordinates: [
+                [requested.lon, requested.lat],
+                [snapped.lon, snapped.lat],
+              ],
+            },
+          });
+        }
+        return values;
+      });
+      return spatialResult(
+        tool,
+        "Network snap",
+        "Each planner stop is correlated to the nearest usable road or path, with its displacement kept visible.",
+        [
+          {
+            label: "Matched",
+            value: `${matched.length}/${snapLocations.length}`,
+          },
+          {
+            label: "Avg offset",
+            value: offsets.length
+              ? `${Math.round(offsets.reduce((sum, value) => sum + value, 0) / offsets.length)} m`
+              : "—",
+          },
+          { label: "Network", value: costing },
+        ],
+        { overlay: overlay(features) },
+      );
+    }
+
+    if (tool === "match") {
+      const shape = (
+        route.length >= 2
+          ? route.filter(
+              (_point, index) =>
+                index % Math.max(1, Math.ceil(route.length / 180)) === 0,
+            )
+          : points.map((point) => [point.lon, point.lat] as Coordinate)
+      ).map(([lon, lat]) => ({ lat, lon }));
+      if (shape.length < 2)
+        return badRequest(
+          "Build a route or add two stops to map-match a trace.",
+        );
+      const result = await client.POST("/api/map-match", {
+        body: { shape, costing, shapeMatch: "map_snap" },
+      });
+      if (result.error)
+        return apiFailure(reply, result.response.status, result.error);
+      const data = result.data as {
+        confidence?: number | null;
+        geometry?: { type: "LineString"; coordinates: Coordinate[] };
+        matchedPoints?: Array<{ matched?: boolean }>;
+        wayIds?: number[];
+      };
+      const matchFeature: SpatialOverlay["features"][number] | undefined =
+        data.geometry
+          ? {
+              type: "Feature",
+              properties: {
+                mapsourceKind: "matched",
+                mapsourceColor: "#e8ffad",
+              },
+              geometry: data.geometry,
+            }
+          : undefined;
+      return spatialResult(
+        tool,
+        "Trace map match",
+        "The current route shape is treated as a recorded GPS trace and fitted back onto the travel network.",
+        [
+          {
+            label: "Confidence",
+            value:
+              typeof data.confidence === "number"
+                ? `${Math.round(data.confidence * 100)}%`
+                : "—",
+          },
+          {
+            label: "Matched",
+            value: `${data.matchedPoints?.filter((point) => point.matched).length ?? 0}/${data.matchedPoints?.length ?? 0}`,
+          },
+          { label: "OSM ways", value: String(data.wayIds?.length ?? 0) },
+        ],
+        matchFeature ? { overlay: overlay([matchFeature]) } : {},
+      );
+    }
+
+    if (tool === "analyze") {
+      if (!hasCenter) return badRequest("A valid map center is required.");
+      const radiusMeters = Math.max(
+        100,
+        Math.min(10_000, Math.round(body.radiusMeters ?? 750)),
+      );
+      const result = await client.POST("/api/analyze", {
+        body: {
+          operation: "buffer",
+          a: [centerPoint!.lon, centerPoint!.lat],
+          distance: radiusMeters,
+          units: "meters",
+        },
+      });
+      if (result.error)
+        return apiFailure(reply, result.response.status, result.error);
+      const data = result.data as {
+        geometry?: Geometry;
+        bbox?: number[];
+      };
+      const feature: SpatialOverlay["features"][number] | undefined =
+        data.geometry
+          ? {
+              type: "Feature",
+              properties: {
+                mapsourceKind: "analysis",
+                mapsourceColor: "#d8ed9d",
+                mapsourceOpacity: 0.2,
+              },
+              geometry: data.geometry,
+            }
+          : undefined;
+      return spatialResult(
+        tool,
+        `${radiusMeters.toLocaleString()} m spatial buffer`,
+        "A true geodesic analysis result around the map center, ready for intersection, discovery, or rendering.",
+        [
+          { label: "Operation", value: "Buffer" },
+          { label: "Radius", value: `${radiusMeters.toLocaleString()} m` },
+          { label: "Bounds", value: data.bbox ? "Computed" : "—" },
+        ],
+        feature ? { overlay: overlay([feature]) } : {},
+      );
+    }
+
+    if (tool === "pipeline") {
+      if (!hasCenter) return badRequest("A valid map center is required.");
+      const category = discoveryCategories.has(body.category ?? "")
+        ? body.category!
+        : "cafe";
+      const result = await client.POST("/api/compute", {
+        body: {
+          pipeline: [
+            {
+              id: "nearby",
+              op: "nearby",
+              args: {
+                lat: centerPoint!.lat,
+                lon: centerPoint!.lon,
+                category,
+                radius: 3_000,
+                limit: 25,
+              },
+            },
+            {
+              id: "closest",
+              op: "limit",
+              args: { input: "$nearby", count: 6 },
+            },
+          ],
+          return: "$closest",
+        },
+      });
+      if (result.error)
+        return apiFailure(reply, result.response.status, result.error);
+      const data = result.data as {
+        data?: unknown;
+        steps?: Array<{
+          id?: string;
+          op?: string;
+          ms?: number;
+          count?: number;
+        }>;
+        result?: { summary?: string };
+      };
+      const returned = data.data as
+        | { places?: Array<Record<string, unknown>> }
+        | { type?: string; features?: SpatialOverlay["features"] }
+        | Array<Record<string, unknown>>
+        | undefined;
+      const places = Array.isArray(returned)
+        ? returned
+        : "places" in (returned ?? {})
+          ? ((returned as { places?: Array<Record<string, unknown>> }).places ??
+            [])
+          : [];
+      const returnedFeatures =
+        !Array.isArray(returned) && "features" in (returned ?? {})
+          ? ((returned as { features?: SpatialOverlay["features"] }).features ??
+            [])
+          : [];
+      const placeFeatures = places.flatMap((place, index) => {
+        const coordinate = place.coordinate as
+          | { lat?: number; lon?: number }
+          | undefined;
+        const placePoint = coordinatePair(coordinate?.lat, coordinate?.lon);
+        if (!placePoint) return [];
+        return [
+          pointFeature(placePoint, {
+            mapsourceKind: "pipeline",
+            mapsourceLabel:
+              typeof place.name === "string"
+                ? place.name
+                : `${category} ${index + 1}`,
+          }),
+        ];
+      });
+      const features = returnedFeatures.length
+        ? returnedFeatures.map((feature) => ({
+            ...feature,
+            properties: {
+              ...(feature.properties ?? {}),
+              mapsourceKind: "pipeline",
+            },
+          }))
+        : placeFeatures;
+      return spatialResult(
+        tool,
+        "Server-side spatial pipeline",
+        `One request found nearby ${category.replaceAll("_", " ")} features, then limited the result without shipping intermediate data to the browser.`,
+        [
+          { label: "Steps", value: String(data.steps?.length ?? 0) },
+          { label: "Returned", value: String(features.length) },
+          {
+            label: "Compute",
+            value: durationLabel(
+              (data.steps ?? []).reduce(
+                (sum, step) => sum + (step.ms ?? 0),
+                0,
+              ) / 1_000,
+            ),
+          },
+        ],
+        features.length ? { overlay: overlay(features) } : {},
+      );
+    }
+
+    if (tool === "overpass") {
+      if (!hasCenter) return badRequest("A valid map center is required.");
+      const query =
+        `[out:json][timeout:18];(` +
+        `nwr(around:5000,${centerPoint!.lat.toFixed(7)},${centerPoint!.lon.toFixed(7)})["amenity"]["name"];` +
+        `nwr(around:5000,${centerPoint!.lat.toFixed(7)},${centerPoint!.lon.toFixed(7)})["tourism"]["name"];` +
+        `);out center tags 60;`;
+      const response = await fetch(`${mapsourceOrigin}/api/interpreter`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${await resolveApiKey()}`,
+          "content-type": "text/plain; charset=utf-8",
+          origin: demoOrigin,
+        },
+        body: query,
+        signal: AbortSignal.timeout(25_000),
+      });
+      const data = (await response.json().catch(() => undefined)) as
+        | {
+            elements?: Array<{
+              type?: string;
+              id?: number;
+              lat?: number;
+              lon?: number;
+              center?: { lat?: number; lon?: number };
+              tags?: Record<string, string>;
+            }>;
+          }
+        | undefined;
+      if (!response.ok) return apiFailure(reply, response.status, data);
+      const features = (data?.elements ?? []).flatMap((element) => {
+        const lat = element.lat ?? element.center?.lat;
+        const lon = element.lon ?? element.center?.lon;
+        const elementPoint = coordinatePair(lat, lon);
+        if (!elementPoint) return [];
+        return [
+          pointFeature(elementPoint, {
+            mapsourceKind: "overpass",
+            mapsourceLabel: element.tags?.name ?? "OSM feature",
+            mapsourceCategory:
+              element.tags?.amenity ?? element.tags?.tourism ?? "feature",
+            osmId: `${element.type ?? "feature"}/${element.id ?? "unknown"}`,
+          }),
+        ];
+      });
+      return spatialResult(
+        tool,
+        "OpenStreetMap topology query",
+        "A live Overpass query found named amenities and visitor features within 5 km of the map center.",
+        [
+          { label: "Features", value: String(features.length) },
+          { label: "Radius", value: "5 km" },
+          { label: "Source", value: "Local OSM" },
+        ],
+        { overlay: overlay(features) },
+      );
+    }
+
+    if (tool === "elevation") {
+      if (!hasCenter) return badRequest("A valid map center is required.");
+      const result = await client.GET("/api/elevation", {
+        params: { query: { lat: centerPoint!.lat, lon: centerPoint!.lon } },
+      });
+      if (result.error)
+        return apiFailure(reply, result.response.status, result.error);
+      const data = result.data as {
+        elevationMeters?: number;
+        sampledMeters?: number;
+        belowSeaLevel?: boolean;
+        resolutionZoom?: number;
+        source?: string;
+      };
+      return spatialResult(
+        tool,
+        "Ground elevation sample",
+        "Mapsource sampled the terrain model at the exact map center and reports both surface and raw model height.",
+        [
+          {
+            label: "Elevation",
+            value:
+              typeof data.elevationMeters === "number"
+                ? `${Math.round(data.elevationMeters)} m`
+                : "—",
+          },
+          {
+            label: "Raw model",
+            value:
+              typeof data.sampledMeters === "number"
+                ? `${Math.round(data.sampledMeters)} m`
+                : "—",
+          },
+          { label: "Tile zoom", value: String(data.resolutionZoom ?? "—") },
+        ],
+        {
+          overlay: overlay([
+            pointFeature(centerPoint!, {
+              mapsourceKind: "elevation",
+              mapsourceLabel: `${Math.round(data.elevationMeters ?? 0)} m`,
+            }),
+          ]),
+        },
+      );
+    }
+
+    if (!hasCenter) return badRequest("A valid map center is required.");
+    const result = await client.GET("/api/contours", {
+      params: {
+        query: {
+          lat: centerPoint!.lat,
+          lon: centerPoint!.lon,
+          zoom: 11,
+          bands: 16,
+          profile: "mobile",
+        },
+      },
+    });
+    if (result.error)
+      return apiFailure(reply, result.response.status, result.error);
+    const data = result.data as {
+      paths?: unknown[];
+      bands?: {
+        produced?: number;
+        intervalMeters?: number | null;
+        reliefMeters?: number | null;
+      };
+    };
+    return spatialResult(
+      tool,
+      "Topographic contour model",
+      "Generated fresh elevation bands for this location; switch to the Elevation surface to inspect them against 3D relief.",
+      [
+        {
+          label: "Bands",
+          value: String(data.bands?.produced ?? data.paths?.length ?? 0),
+        },
+        {
+          label: "Interval",
+          value:
+            typeof data.bands?.intervalMeters === "number"
+              ? `${Math.round(data.bands.intervalMeters)} m`
+              : "—",
+        },
+        {
+          label: "Relief",
+          value:
+            typeof data.bands?.reliefMeters === "number"
+              ? `${Math.round(data.bands.reliefMeters)} m`
+              : "—",
+        },
+      ],
+    );
+  },
+);
+
+app.post<{ Body: SpatialInput & { surface?: string } }>(
+  "/api/spatial/static-map",
+  { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+  async (request, reply) => {
+    const center = request.body?.center;
+    const centerPoint = coordinatePair(center?.lat, center?.lon);
+    if (!centerPoint) {
+      return reply.code(400).send({
+        error: {
+          code: "BAD_REQUEST",
+          message: "A valid map center is required.",
+        },
+      });
+    }
+    const route = (request.body.route ?? []).filter(
+      (coordinate): coordinate is Coordinate =>
+        Array.isArray(coordinate) &&
+        coordinate.length >= 2 &&
+        finiteCoordinate(coordinate[1], coordinate[0]),
+    );
+    const waypoints = (request.body.waypoints ?? []).filter((point) =>
+      finiteCoordinate(point?.lat, point?.lon),
+    );
+    const style =
+      request.body.surface === "light" || request.body.surface === "dark"
+        ? request.body.surface
+        : "mapsource";
+    const geojson =
+      route.length >= 2
+        ? {
+            type: "Feature",
+            properties: {},
+            geometry: { type: "LineString", coordinates: route },
+          }
+        : undefined;
+    reply.header("content-disposition", 'inline; filename="mapsource-map.png"');
+    return proxyBinary(reply, `${mapsourceOrigin}/api/render/static`, {
+      authenticated: true,
+      method: "POST",
+      body: JSON.stringify({
+        lat: centerPoint.lat,
+        lon: centerPoint.lon,
+        zoom: 13.2,
+        width: 900,
+        height: 560,
+        style,
+        geojson,
+        markers: waypoints.map((point, index) => ({
+          lat: point.lat,
+          lon: point.lon,
+          label:
+            index === 0
+              ? "A"
+              : index === waypoints.length - 1
+                ? "B"
+                : String(index),
+        })),
+      }),
+      contentType: "application/json",
+      accept: "image/png",
+      fallbackType: "image/png",
+      timeoutMs: 30_000,
+    });
   },
 );
 

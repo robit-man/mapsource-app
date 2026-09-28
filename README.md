@@ -6,7 +6,9 @@ The live deployment is available at [`app.mapsource.io`](https://app.mapsource.i
 
 ## What the example includes
 
-- Mapsource vector cartography, glyphs, terrain tiles, local place search, pedestrian/bicycle routing, maneuvers, and route elevation.
+- Mapsource vector cartography, glyphs, terrain tiles, local place search, routing, maneuvers, and route elevation.
+- A map-native spatial tools surface for live isochrones, travel matrices, stop optimization, network snapping, map matching, Overpass queries, point elevation, generated contours, spatial buffers, multi-step compute pipelines, and static map rendering.
+- A live catalog projected from the installed `mapsource` SDK that keeps every published discovery, navigation, terrain, compute, cartography, delivery, telemetry, and account operation discoverable without maintaining a second endpoint list.
 - Walk, bicycle, car, bus, and train planning with 2–10 ordered stops. Bus views reference mapped bus stops; train views reference mapped railway tracks, stations, and light-rail stations while distinguishing network previews from live schedules.
 - Draggable map stops, tap-to-reposition mode, editable stop names, inline local search for inserted stops, and elastic route-stop reordering with live A/#/B relabeling.
 - Live GPS navigation with a hydrated traveled path, maneuver-specific next-turn guidance, off-route detection, and automatic rerouting.
@@ -21,12 +23,14 @@ The interface is an original Mapsource implementation. It demonstrates familiar 
 
 ```text
 Browser (React + MapLibre)
-  ├─ /api/search       ─┐
-  ├─ /api/route        ─┼─ Node/Fastify example server
-  ├─ /map/style.json   ─┤    └─ mapsource npm client → Mapsource API
-  ├─ /map/tiles/*      ─┤
-  ├─ /map/terrain/*    ─┤
-  └─ /map/satellite/* ──┘       → allowlisted Esri World Imagery tiles
+  ├─ /api/search          ─┐
+  ├─ /api/route           ─┤
+  ├─ /api/spatial/*       ─┼─ Node/Fastify credential boundary
+  ├─ /api/capabilities   ─┤    └─ mapsource npm client → Mapsource API
+  ├─ /map/style.json      ─┤
+  ├─ /map/tiles/*         ─┤
+  ├─ /map/terrain/*       ─┤
+  └─ /map/satellite/*    ─┘       → allowlisted Esri World Imagery tiles
 ```
 
 The Mapsource API key never enters browser JavaScript, HTML, URLs, or local storage. The server uses the typed npm client for JSON APIs and narrow same-origin binary proxies for renderer resources. Tile paths validate coordinate bounds and never accept arbitrary upstream URLs.
@@ -78,7 +82,11 @@ const { data, error, response } = await mapsource.POST("/api/route", {
 if (error) throw new Error(`Mapsource ${response.status}`);
 ```
 
-See [`server/index.ts`](server/index.ts) for search, routing, style rewriting, and the renderer proxies.
+See [`server/index.ts`](server/index.ts) for search, routing, spatial compute,
+style rewriting, and the renderer proxies. The interactive demo intentionally
+does not run account/key mutations through its shared server credential; those
+operations remain visible in the generated catalog and link to the account and
+API documentation surfaces.
 
 ## Verification
 

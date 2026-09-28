@@ -50,5 +50,6 @@ The application is intentionally loopback-bound. Cloudflare Tunnel is the only p
 
 - Keep map interaction usable at 360 CSS pixels wide and with touch input.
 - A user must be able to drag a marker or select Move and tap the map.
-- Route replay and reduced-motion preferences must remain independent: reduced-motion disables decorative transitions, not explicit replay requested by the user.
+- Route progress is driven by live device location only. Do not restore simulated route replay controls or timers.
+- The spatial-tools catalog must be projected from the installed `mapsource` package operation catalog. Interactive examples may add experience-specific copy, but must not become a second hand-maintained API inventory. Every published operation remains discoverable even when shared-demo-key safety means it is documentation-only.
 - Keep controls accessible by name, pressed/expanded state, keyboard focus, and non-color state indicators.

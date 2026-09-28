@@ -1,3 +1,5 @@
+import type { FeatureCollection, Geometry } from "geojson";
+
 export type Coordinate = [number, number];
 
 export type MapCameraState = {
@@ -124,4 +126,50 @@ export type ApiError = {
     requestId?: string;
     retryable?: boolean;
   };
+};
+
+export type SpatialToolId =
+  | "isochrone"
+  | "matrix"
+  | "optimize"
+  | "snap"
+  | "match"
+  | "analyze"
+  | "pipeline"
+  | "overpass"
+  | "elevation"
+  | "contours";
+
+export type SpatialOverlay = FeatureCollection<
+  Geometry,
+  { [name: string]: unknown }
+>;
+
+export type SpatialToolResult = {
+  tool: SpatialToolId;
+  title: string;
+  summary: string;
+  stats: Array<{ label: string; value: string }>;
+  overlay?: SpatialOverlay;
+  optimizedOrder?: number[];
+  generatedAt: string;
+};
+
+export type CapabilityOperation = {
+  id: string;
+  category: string;
+  method: string;
+  path: string;
+  summary: string;
+  description: string;
+  access: string;
+};
+
+export type CapabilityCatalog = {
+  total: number;
+  groups: Array<{
+    category: string;
+    label: string;
+    operations: CapabilityOperation[];
+  }>;
 };

@@ -4,6 +4,7 @@ type IconName =
   | "plus"
   | "minus"
   | "layers"
+  | "tools"
   | "terrain"
   | "locate"
   | "route"
@@ -49,6 +50,14 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
       <>
         <path d="m12 3 9 5-9 5-9-5 9-5Z" />
         <path d="m3 12 9 5 9-5M3 16l9 5 9-5" />
+      </>
+    ),
+    tools: (
+      <>
+        <circle cx="6" cy="7" r="2.2" />
+        <circle cx="18" cy="6" r="2.2" />
+        <circle cx="16" cy="18" r="2.2" />
+        <path d="m7.9 8.1 6.3 7.6M8.2 6.8l7.5-.6M17.5 8.2l-1.1 7.6" />
       </>
     ),
     terrain: (

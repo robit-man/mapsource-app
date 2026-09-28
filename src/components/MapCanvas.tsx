@@ -15,6 +15,7 @@ import {
 import type {
   Feature,
   FeatureCollection,
+  Geometry,
   LineString,
   Polygon,
   Position,
@@ -44,6 +45,7 @@ import type {
   MapSurface,
   RouteMode,
   RouteResponse,
+  SpatialOverlay,
   UserLocationFix,
   ViewBounds,
   Waypoint,
@@ -60,6 +62,8 @@ type MapCanvasProps = {
   mode: RouteMode;
   navigationActive: boolean;
   selectedWaypointId: string | null;
+  spatialOverlay: SpatialOverlay | null;
+  spatialOverlayRevision: number;
   onWaypointMove: (
     id: string,
     coordinate: { lat: number; lon: number },
@@ -96,6 +100,28 @@ const emptyFeatures = (): FeatureCollection => ({
   type: "FeatureCollection",
   features: [],
 });
+
+function geometryCoordinates(geometry: Geometry): Coordinate[] {
+  if (geometry.type === "Point") {
+    return [[geometry.coordinates[0], geometry.coordinates[1]]];
+  }
+  if (geometry.type === "LineString" || geometry.type === "MultiPoint") {
+    return geometry.coordinates.map((point) => [point[0], point[1]]);
+  }
+  if (geometry.type === "Polygon" || geometry.type === "MultiLineString") {
+    return geometry.coordinates.flatMap((line) =>
+      line.map((point) => [point[0], point[1]] as Coordinate),
+    );
+  }
+  if (geometry.type === "MultiPolygon") {
+    return geometry.coordinates.flatMap((polygon) =>
+      polygon.flatMap((line) =>
+        line.map((point) => [point[0], point[1]] as Coordinate),
+      ),
+    );
+  }
+  return geometry.geometries.flatMap(geometryCoordinates);
+}
 
 type BuildingSelection = {
   feature: Feature<Polygon>;
@@ -569,6 +595,8 @@ export function MapCanvas({
   mode,
   navigationActive,
   selectedWaypointId,
+  spatialOverlay,
+  spatialOverlayRevision,
   onWaypointMove,
   onMapPick,
   onAddIntermediate,
@@ -605,6 +633,7 @@ export function MapCanvas({
   const modeRef = useRef(mode);
   const routeRef = useRef(route);
   const waypointsRef = useRef(waypoints);
+  const spatialOverlayRef = useRef(spatialOverlay);
   const navigationProgressRef = useRef(navigationProgress);
   const heldBuildingRef = useRef<BuildingSelection | null>(null);
   const userTrackingRef = useRef(false);
@@ -656,6 +685,7 @@ export function MapCanvas({
     modeRef.current = mode;
     routeRef.current = route;
     waypointsRef.current = waypoints;
+    spatialOverlayRef.current = spatialOverlay;
     navigationProgressRef.current = navigationProgress;
   }, [
     onCenterChange,
@@ -671,6 +701,7 @@ export function MapCanvas({
     navigationProgress,
     route,
     selectedWaypointId,
+    spatialOverlay,
     surface,
     waypoints,
   ]);
@@ -2008,6 +2039,66 @@ export function MapCanvas({
         type: "geojson",
         data: emptyFeatures(),
       });
+      map.addSource("spatial-tools", {
+        type: "geojson",
+        data: spatialOverlayRef.current ?? emptyFeatures(),
+      });
+      map.addLayer(
+        {
+          id: "spatial-tools-fill",
+          type: "fill",
+          source: "spatial-tools",
+          filter: [
+            "in",
+            ["geometry-type"],
+            ["literal", ["Polygon", "MultiPolygon"]],
+          ],
+          paint: {
+            "fill-color": ["coalesce", ["get", "mapsourceColor"], "#d8ed9d"],
+            "fill-opacity": ["coalesce", ["get", "mapsourceOpacity"], 0.18],
+            "fill-outline-color": "#d8ed9d",
+          },
+        },
+        before,
+      );
+      map.addLayer(
+        {
+          id: "spatial-tools-line",
+          type: "line",
+          source: "spatial-tools",
+          filter: [
+            "in",
+            ["geometry-type"],
+            ["literal", ["LineString", "MultiLineString"]],
+          ],
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: {
+            "line-color": ["coalesce", ["get", "mapsourceColor"], "#d8ed9d"],
+            "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2, 16, 5],
+            "line-opacity": 0.9,
+          },
+        },
+        before,
+      );
+      map.addLayer(
+        {
+          id: "spatial-tools-points",
+          type: "circle",
+          source: "spatial-tools",
+          filter: [
+            "in",
+            ["geometry-type"],
+            ["literal", ["Point", "MultiPoint"]],
+          ],
+          paint: {
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 4, 16, 8],
+            "circle-color": "#d8ed9d",
+            "circle-stroke-color": "#101310",
+            "circle-stroke-width": 3,
+          },
+        },
+        before,
+      );
       map.addLayer(
         {
           id: "selected-building-fill",
@@ -2865,6 +2956,43 @@ export function MapCanvas({
       geometry: { type: "LineString", coordinates: traveled },
     });
   }, [navigationProgress, ready, route]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const source = map.getSource("spatial-tools") as GeoJSONSource | undefined;
+    source?.setData(spatialOverlay ?? emptyFeatures());
+    if (containerRef.current) {
+      containerRef.current.dataset.spatialFeatureCount = String(
+        spatialOverlay?.features.length ?? 0,
+      );
+    }
+    if (!spatialOverlay || spatialOverlay.features.length === 0) return;
+    const coordinates = spatialOverlay.features.flatMap((feature) =>
+      feature.geometry ? geometryCoordinates(feature.geometry) : [],
+    );
+    if (coordinates.length === 0) return;
+    if (coordinates.length === 1) {
+      map.easeTo({
+        center: coordinates[0]!,
+        zoom: Math.max(map.getZoom(), 14),
+        duration: 650,
+      });
+      return;
+    }
+    const bounds = coordinates
+      .slice(1)
+      .reduce(
+        (value, coordinate) => value.extend(coordinate),
+        new LngLatBounds(coordinates[0]!, coordinates[0]!),
+      );
+    map.fitBounds(bounds, {
+      padding: visibleMapPadding(),
+      maxZoom: 15,
+      duration: 750,
+      essential: true,
+    });
+  }, [ready, spatialOverlay, spatialOverlayRevision]);
 
   return <div className="map-canvas" ref={containerRef} />;
 }

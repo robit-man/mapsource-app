@@ -316,6 +316,29 @@ location` origin actions; destination shows `Select on map or search`.
       persistence, and copy. Keep route progress and the traveled-path overlay
       driven only by live device-location navigation.
 
+## Full Mapsource service coverage
+
+- [x] APP-106 Expose a live capability catalog generated from the installed
+      `mapsource` SDK, covering every published discovery, navigation, terrain,
+      compute, cartography, delivery, telemetry, and account operation without
+      creating a second hand-maintained API inventory.
+- [x] APP-107 Integrate isochrones, travel matrices, stop optimization, network
+      snapping, and map matching as map-native planning tools with useful
+      defaults, prerequisites, result summaries, and visible geometry.
+- [x] APP-108 Integrate point elevation, generated contour metrics, and bounded
+      live Overpass queries around the current map view; move to the elevation
+      surface when a contour model is generated.
+- [x] APP-109 Integrate spatial analysis, multi-step compute pipelines, and
+      static PNG rendering using the current center, route, stops, travel mode,
+      and map surface as inputs rather than exposing raw JSON forms.
+- [x] APP-110 Preserve the server credential boundary for every added service.
+      Account/key mutations, font/profile deletion, and other control-plane
+      operations stay discoverable and documented but are never executed with
+      the shared demo key.
+- [x] APP-111 Rehydrate spatial result overlays after vector style changes,
+      fit them into the visible map region, and render polygon, line, and point
+      outputs with Mapsource styling.
+
 ## Release evidence required before closing in-progress work
 
 - [x] TODO-VERIFY-001 `npm run validate` passes from a clean production build.

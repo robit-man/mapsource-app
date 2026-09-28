@@ -7,6 +7,7 @@ import {
 import { MapCanvas } from "./components/MapCanvas";
 import { RoutePanel } from "./components/RoutePanel";
 import { SearchBar } from "./components/SearchBar";
+import { SpatialTools } from "./components/SpatialTools";
 import { Icon } from "./components/Icon";
 import {
   initialMapLocation,
@@ -36,6 +37,7 @@ import type {
   RouteResponse,
   SearchResult,
   SheetMode,
+  SpatialOverlay,
   UserLocationFix,
   ViewBounds,
   Waypoint,
@@ -151,6 +153,12 @@ export default function App() {
     () => restoredState?.surface ?? "mapsource",
   );
   const [layersOpen, setLayersOpen] = useState(false);
+  const [spatialToolsOpen, setSpatialToolsOpen] = useState(false);
+  const [spatialLayer, setSpatialLayer] = useState<{
+    overlay: SpatialOverlay;
+    title?: string;
+    revision: number;
+  } | null>(null);
   const [sheetMode, setSheetMode] = useState<SheetMode>(
     () => restoredState?.sheetMode ?? "half",
   );
@@ -776,6 +784,8 @@ export default function App() {
         navigationProgress={navigationProgress}
         route={route}
         selectedWaypointId={selectedWaypointId}
+        spatialOverlay={spatialLayer?.overlay ?? null}
+        spatialOverlayRevision={spatialLayer?.revision ?? 0}
         surface={surface}
         waypoints={waypoints}
       />
@@ -792,10 +802,25 @@ export default function App() {
 
       <div className="map-tools">
         <button
+          aria-expanded={spatialToolsOpen}
+          aria-label="Mapsource spatial tools"
+          className={`tool-button glass ${spatialToolsOpen ? "is-active" : ""}`}
+          onClick={() => {
+            setSpatialToolsOpen((value) => !value);
+            setLayersOpen(false);
+          }}
+          type="button"
+        >
+          <Icon name="tools" size={19} />
+        </button>
+        <button
           aria-expanded={layersOpen}
           aria-label="Map layers"
           className={`tool-button glass ${layersOpen ? "is-active" : ""}`}
-          onClick={() => setLayersOpen((value) => !value)}
+          onClick={() => {
+            setLayersOpen((value) => !value);
+            setSpatialToolsOpen(false);
+          }}
           type="button"
         >
           <Icon name="layers" size={19} />
@@ -834,6 +859,45 @@ export default function App() {
               </button>
             ))}
           </div>
+        )}
+        {spatialToolsOpen && (
+          <SpatialTools
+            center={center}
+            mode={mode}
+            onApplyOptimizedOrder={(order) => {
+              setWaypoints((current) => {
+                if (
+                  order.length !== current.length ||
+                  new Set(order).size !== current.length ||
+                  order.some(
+                    (index) => !Number.isInteger(index) || !current[index],
+                  )
+                ) {
+                  return current;
+                }
+                return order.map((index) => current[index]!);
+              });
+            }}
+            onClose={() => setSpatialToolsOpen(false)}
+            onOverlay={(overlay, title) => {
+              if (!overlay) {
+                setSpatialLayer(null);
+                return;
+              }
+              setSpatialLayer((current) => ({
+                overlay,
+                title,
+                revision: (current?.revision ?? 0) + 1,
+              }));
+            }}
+            onSurface={(nextSurface) => {
+              setSurface(nextSurface);
+              setLayersOpen(false);
+            }}
+            route={route}
+            surface={surface}
+            waypoints={waypoints}
+          />
         )}
       </div>
 
