@@ -27,6 +27,12 @@ import {
 } from "../route-utils";
 import { LocationSmoother } from "../location-smoothing";
 import {
+  anchoredPointMarker,
+  bindResultHover,
+  placeMarkerElement,
+} from "../map-markers";
+import { routeLine, syncRouteOverlay } from "../route-overlay";
+import {
   compassAccuracyConfidence,
   magneticHeadingToTrue,
   navigationHeading,
@@ -92,16 +98,28 @@ type MapCanvasProps = {
   searchResults: PresentedSearchResult[];
   fitSearchResults: boolean;
   selectedSearchResultId: string | null;
+  hoveredSearchResultId: string | null;
+  listHoveredSearchResultId: string | null;
+  searchSelectionRevision: number;
+  onSearchResultHover: (id: string | null) => void;
   onSearchResultSelect: (result: PresentedSearchResult) => void;
   onDiscoverySelect: (place: DiscoveryPlace) => void;
   onUserViewportChange: () => void;
 };
 
-const emptyLine = (): Feature<LineString> => ({
-  type: "Feature",
-  properties: {},
-  geometry: { type: "LineString", coordinates: [] },
-});
+type HeldPointSelection =
+  | { kind: "point"; coordinate: Coordinate }
+  | {
+      kind: "business";
+      coordinate: Coordinate;
+      place: DiscoveryPlace;
+      category: string;
+    }
+  | {
+      kind: "search-business";
+      coordinate: Coordinate;
+      result: PresentedSearchResult;
+    };
 
 const emptyFeatures = (): FeatureCollection => ({
   type: "FeatureCollection",
@@ -127,7 +145,9 @@ function geometryCoordinates(geometry: Geometry): Coordinate[] {
       ),
     );
   }
-  return geometry.geometries.flatMap(geometryCoordinates);
+  return geometry.type === "GeometryCollection"
+    ? geometry.geometries.flatMap(geometryCoordinates)
+    : [];
 }
 
 type BuildingSelection = {
@@ -428,7 +448,16 @@ function closeAttribution(container: HTMLElement | null) {
 
 function visibleMapPadding() {
   if (window.innerWidth > 760) {
-    return { top: 120, right: 90, bottom: 120, left: 455 };
+    const panel = document
+      .querySelector<HTMLElement>(".route-panel")
+      ?.getBoundingClientRect();
+    const tallPanel = panel && panel.height > window.innerHeight * 0.45;
+    return {
+      top: 104,
+      right: 90,
+      bottom: tallPanel ? 48 : (panel?.height ?? 0) + 48,
+      left: tallPanel ? panel.right + 24 : 48,
+    };
   }
   const sheet = document.querySelector<HTMLElement>(".route-panel");
   const coveredHeight = sheet?.getBoundingClientRect().height ?? 154;
@@ -454,13 +483,53 @@ function visibleMapFocusTarget(map: MapLibreMap) {
         ? height / 2 - Math.min(42, panelHeight * 0.28)
         : Math.max(70, (height - panelHeight) / 2);
   } else if (panel) {
-    x = (panel.getBoundingClientRect().right + width) / 2;
+    const bounds = panel.getBoundingClientRect();
+    if (bounds.height > height * 0.45) x = (bounds.right + width) / 2;
+    else y = Math.max(104, bounds.top / 2);
   }
   return {
     x,
     y,
     offset: [x - width / 2, y - height / 2] as [number, number],
   };
+}
+
+function searchPreviewOffset(map: MapLibreMap): [number, number] {
+  const width = map.getContainer().clientWidth;
+  const height = map.getContainer().clientHeight;
+  const padding = visibleMapPadding();
+  const area = {
+    left: padding.left,
+    right: width - padding.right,
+    top: padding.top,
+    bottom: height - padding.bottom,
+  };
+  const list = document
+    .getElementById("map-search-results")
+    ?.getBoundingClientRect();
+  const regions = list
+    ? [
+        { ...area, right: Math.min(area.right, list.left - 20) },
+        { ...area, left: Math.max(area.left, list.right + 20) },
+        { ...area, bottom: Math.min(area.bottom, list.top - 20) },
+        { ...area, top: Math.max(area.top, list.bottom + 20) },
+      ]
+    : [area];
+  const visible = regions
+    .filter(
+      (region) =>
+        region.right - region.left >= 80 && region.bottom - region.top >= 80,
+    )
+    .sort(
+      (a, b) =>
+        (b.right - b.left) * (b.bottom - b.top) -
+        (a.right - a.left) * (a.bottom - a.top),
+    )[0];
+  if (!visible) return visibleMapFocusTarget(map).offset;
+  return [
+    (visible.left + visible.right - width) / 2,
+    (visible.top + visible.bottom - height) / 2,
+  ];
 }
 
 type CameraSnapshot = {
@@ -529,23 +598,29 @@ function safeWebsite(value: string | undefined): string | null {
   }
 }
 
-function placePopup(place: DiscoveryPlace, category: string) {
+function businessCard(name: string, category: string, detail: string) {
   const card = document.createElement("article");
   card.className = "business-card";
   const eyebrow = document.createElement("span");
   eyebrow.textContent = category.replaceAll("_", " ");
   const title = document.createElement("strong");
-  title.textContent = place.name ?? "Mapped place";
+  title.textContent = name;
   const address = document.createElement("p");
-  address.textContent = [
+  address.textContent = detail;
+  card.append(eyebrow, title);
+  if (detail) card.append(address);
+  return card;
+}
+
+function placePopup(place: DiscoveryPlace, category: string) {
+  const address = [
     place.address.housenumber,
     place.address.street,
     place.address.city,
   ]
     .filter(Boolean)
     .join(" ");
-  card.append(eyebrow, title);
-  if (address.textContent) card.append(address);
+  const card = businessCard(place.name ?? "Mapped place", category, address);
   const actions = document.createElement("div");
   actions.className = "business-actions";
   const phone = place.properties.phone ?? place.properties["contact:phone"];
@@ -621,6 +696,10 @@ export function MapCanvas({
   searchResults,
   fitSearchResults,
   selectedSearchResultId,
+  hoveredSearchResultId,
+  listHoveredSearchResultId,
+  searchSelectionRevision,
+  onSearchResultHover,
   onSearchResultSelect,
   onDiscoverySelect,
   onUserViewportChange,
@@ -630,10 +709,15 @@ export function MapCanvas({
   const markersRef = useRef<Marker[]>([]);
   const businessMarkersRef = useRef<Marker[]>([]);
   const searchMarkersRef = useRef<Marker[]>([]);
-  const businessPopupRef = useRef<Popup | null>(null);
   const intermediateMarkerRef = useRef<Marker | null>(null);
   const focusedDiscoveryRef = useRef<string | null>(null);
   const focusedSearchRef = useRef<string | null>(null);
+  const searchPreviewRef = useRef<
+    | (CameraSnapshot & {
+        padding: { top: number; right: number; bottom: number; left: number };
+      })
+    | null
+  >(null);
   const selectedRef = useRef(selectedWaypointId);
   const onMapPickRef = useRef(onMapPick);
   const onAddIntermediateRef = useRef(onAddIntermediate);
@@ -680,8 +764,11 @@ export function MapCanvas({
   const pendingCameraRef = useRef<CameraSnapshot | null>(null);
   const resumeFollowAfterStyleRef = useRef(false);
   const preserveCameraForRouteRef = useRef(Boolean(initialCamera));
-  const [ready, setReady] = useState(false);
-  const [heldPoint, setHeldPoint] = useState<Coordinate | null>(null);
+  const [ready, setReady] = useState<number | null>(null);
+  const [heldSelection, setHeldSelection] = useState<HeldPointSelection | null>(
+    null,
+  );
+  const heldPoint = heldSelection?.coordinate ?? null;
   const [heldBuilding, setHeldBuilding] = useState<BuildingSelection | null>(
     null,
   );
@@ -867,6 +954,7 @@ export function MapCanvas({
     recenterButton.ariaLabel = "Recenter on current location";
     mapContainer.append(recenterButton);
     let attributionAdded = false;
+    let styleGeneration = 0;
     let userFocusSequence = 0;
     let userZooming = false;
     let userViewportGesture = false;
@@ -1008,6 +1096,7 @@ export function MapCanvas({
     ) => {
       if (
         !userFollowingRef.current ||
+        searchPreviewRef.current ||
         userZooming ||
         preserveMultiTouchFollow ||
         userAdjustingCamera ||
@@ -1149,6 +1238,7 @@ export function MapCanvas({
 
     const handleZoomStart = (event: { originalEvent?: unknown }) => {
       if (!event.originalEvent) return;
+      searchPreviewRef.current = null;
       userCameraInteractedRef.current = true;
       userViewportGesture = true;
       userZooming = true;
@@ -1178,6 +1268,7 @@ export function MapCanvas({
         return;
       }
       userCameraInteractedRef.current = true;
+      searchPreviewRef.current = null;
       userViewportGesture = true;
       if (userTrackingRef.current) setCameraFollowing(false);
     };
@@ -1185,6 +1276,7 @@ export function MapCanvas({
       originalEvent?: unknown;
     }) => {
       if (!event.originalEvent) return;
+      searchPreviewRef.current = null;
       userCameraInteractedRef.current = true;
       userViewportGesture = true;
       userAdjustingCamera = true;
@@ -1666,11 +1758,12 @@ export function MapCanvas({
       );
     };
     const selectHeldPoint = (point: { x: number; y: number }) => {
+      searchPreviewRef.current = null;
       map.stop();
       const coordinate = map.unproject([point.x, point.y]);
       const selected: Coordinate = [coordinate.lng, coordinate.lat];
       const building = highlightedBuildingAt(map, point);
-      setHeldPoint(selected);
+      setHeldSelection({ kind: "point", coordinate: selected });
       setHeldBuilding(building);
       const inspectionCoordinate = building?.lookupCoordinate ?? selected;
       onInspectPointRef.current(
@@ -1991,7 +2084,7 @@ export function MapCanvas({
     geolocateButton.addEventListener("click", activateLocation);
 
     map.on("styledataloading", () => {
-      setReady(false);
+      setReady(null);
       containerRef.current?.classList.add("is-switching-surface");
     });
     map.on("style.load", () => {
@@ -2051,12 +2144,6 @@ export function MapCanvas({
           before,
         );
       }
-      map.addSource("route", { type: "geojson", data: emptyLine() });
-      map.addSource("route-traveled", { type: "geojson", data: emptyLine() });
-      map.addSource("route-connectors", {
-        type: "geojson",
-        data: emptyFeatures(),
-      });
       map.addSource("selected-building", {
         type: "geojson",
         data: emptyFeatures(),
@@ -2170,109 +2257,17 @@ export function MapCanvas({
         },
         before,
       );
-      map.addLayer(
-        {
-          id: "route-connectors-casing",
-          type: "line",
-          source: "route-connectors",
-          layout: { "line-cap": "round", "line-join": "round" },
-          paint: {
-            "line-color": "#101310",
-            "line-width": ["interpolate", ["linear"], ["zoom"], 10, 5, 16, 9],
-            "line-opacity": 0.9,
-          },
-        },
-        before,
-      );
-      map.addLayer(
-        {
-          id: "route-connectors-line",
-          type: "line",
-          source: "route-connectors",
-          layout: { "line-cap": "round", "line-join": "round" },
-          paint: {
-            "line-color": "#d8f88b",
-            "line-width": ["interpolate", ["linear"], ["zoom"], 10, 2.5, 16, 5],
-            "line-dasharray": [1, 1.4],
-            "line-opacity": 0.94,
-          },
-        },
-        before,
-      );
-      map.addLayer(
-        {
-          id: "route-casing",
-          type: "line",
-          source: "route",
-          layout: { "line-cap": "round", "line-join": "round" },
-          paint: {
-            "line-color": "#101310",
-            "line-width": ["interpolate", ["linear"], ["zoom"], 10, 6, 16, 12],
-            "line-opacity": 0.92,
-          },
-        },
-        before,
-      );
-      map.addLayer(
-        {
-          id: "route-line",
-          type: "line",
-          source: "route",
-          layout: { "line-cap": "round", "line-join": "round" },
-          paint: {
-            "line-color": "#d8f88b",
-            "line-width": [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              10,
-              3.2,
-              16,
-              6.8,
-            ],
-            "line-opacity": 0.96,
-          },
-        },
-        before,
-      );
-      map.addLayer(
-        {
-          id: "route-traveled-line",
-          type: "line",
-          source: "route-traveled",
-          layout: { "line-cap": "round", "line-join": "round" },
-          paint: {
-            "line-color": "#e9ffc2",
-            "line-width": ["interpolate", ["linear"], ["zoom"], 10, 3.2, 16, 7],
-            "line-blur": 0.35,
-          },
-        },
-        before,
-      );
       const restoredCoordinates = routeCoordinates(routeRef.current);
-      (map.getSource("route") as GeoJSONSource).setData({
-        type: "Feature",
-        properties: {},
-        geometry: { type: "LineString", coordinates: restoredCoordinates },
-      });
       const restoredConnectors = routeConnectors(
         waypointsRef.current,
         restoredCoordinates,
       );
-      (map.getSource("route-connectors") as GeoJSONSource).setData(
+      syncRouteOverlay(
+        map,
+        restoredCoordinates,
         restoredConnectors,
+        lineAtProgress(restoredCoordinates, navigationProgressRef.current),
       );
-      (map.getSource("route-traveled") as GeoJSONSource).setData({
-        type: "Feature",
-        properties: {},
-        geometry: {
-          type: "LineString",
-          coordinates: lineAtProgress(
-            restoredCoordinates,
-            navigationProgressRef.current,
-          ),
-        },
-      });
       const restoredBuilding = heldBuildingRef.current;
       (map.getSource("selected-building") as GeoJSONSource).setData(
         restoredBuilding
@@ -2332,7 +2327,7 @@ export function MapCanvas({
         element?.parentElement?.append(element);
       }
       closeAttribution(containerRef.current);
-      setReady(true);
+      setReady(++styleGeneration);
       if (surfaceTransitionTimer !== null) {
         window.clearTimeout(surfaceTransitionTimer);
       }
@@ -2354,8 +2349,17 @@ export function MapCanvas({
         onMapPickRef.current({ lat: event.lngLat.lat, lon: event.lngLat.lng });
       }
     });
-    map.on("moveend", () => {
+    map.on("idle", () => {
+      if (containerRef.current && map.getLayer("route-line")) {
+        containerRef.current.dataset.routeRenderedFeatureCount = String(
+          map.queryRenderedFeatures({ layers: ["route-line"] }).length,
+        );
+      }
+    });
+    map.on("moveend", (event) => {
       updateMapTelemetry();
+      if ((event as typeof event & { searchPreview?: boolean }).searchPreview)
+        return;
       const center = map.getCenter();
       onCenterChangeRef.current({ lat: center.lat, lon: center.lng });
       onCameraChangeRef.current({
@@ -2378,7 +2382,7 @@ export function MapCanvas({
     });
 
     return () => {
-      setReady(false);
+      setReady(null);
       geolocateButton.removeEventListener("click", requestOrientation, {
         capture: true,
       });
@@ -2536,7 +2540,7 @@ export function MapCanvas({
     element.className = "intermediate-point";
     element.addEventListener("pointerdown", (event) => event.stopPropagation());
 
-    if (heldPointDetails) {
+    if (heldPointDetails && heldSelection?.kind === "point") {
       const label = document.createElement("div");
       label.className = "intermediate-point__label";
       label.ariaLive = "polite";
@@ -2558,7 +2562,7 @@ export function MapCanvas({
     origin.title = "Dismiss";
     appendSvg(origin, intermediateIconPaths.origin);
     origin.addEventListener("click", () => {
-      setHeldPoint(null);
+      setHeldSelection(null);
       setHeldBuilding(null);
     });
     element.append(origin);
@@ -2570,7 +2574,7 @@ export function MapCanvas({
         label: "Add map point to route",
         run: () => {
           onAddIntermediateRef.current(coordinate);
-          setHeldPoint(null);
+          setHeldSelection(null);
         },
       },
       {
@@ -2589,7 +2593,7 @@ export function MapCanvas({
               ? { lat: location[1], lon: location[0] }
               : null,
           );
-          setHeldPoint(null);
+          setHeldSelection(null);
         },
       },
     ] as const;
@@ -2606,12 +2610,11 @@ export function MapCanvas({
       });
       element.append(button);
     }
-    intermediateMarkerRef.current = new MapLibreMarker({
+    intermediateMarkerRef.current = anchoredPointMarker(
       element,
-      anchor: "top",
-    })
-      .setLngLat(heldPoint)
-      .addTo(map);
+      heldPoint,
+      map,
+    );
     window.requestAnimationFrame(() => {
       const rect = origin.getBoundingClientRect();
       const projected = map.project(heldPoint);
@@ -2627,7 +2630,39 @@ export function MapCanvas({
       intermediateMarkerRef.current?.remove();
       intermediateMarkerRef.current = null;
     };
-  }, [heldPoint, heldPointDetails, ready]);
+  }, [heldPoint, heldPointDetails, heldSelection, ready]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !heldSelection || heldSelection.kind === "point")
+      return;
+    const card =
+      heldSelection.kind === "business"
+        ? placePopup(heldSelection.place, heldSelection.category)
+        : businessCard(
+            heldSelection.result.name,
+            heldSelection.result.category ?? "business",
+            heldSelection.result.detail,
+          );
+    const popup = new Popup({
+      closeButton: true,
+      closeOnClick: true,
+      offset: 18,
+      maxWidth: "290px",
+    })
+      .setLngLat(heldSelection.coordinate)
+      .setDOMContent(card)
+      .addTo(map);
+    const dismiss = () =>
+      setHeldSelection((current) =>
+        current === heldSelection ? null : current,
+      );
+    popup.on("close", dismiss);
+    return () => {
+      popup.off("close", dismiss);
+      popup.remove();
+    };
+  }, [heldSelection, ready]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -2660,6 +2695,79 @@ export function MapCanvas({
   }, [heldBuilding, ready]);
 
   useEffect(() => {
+    searchPreviewRef.current = null;
+  }, [searchSelectionRevision]);
+
+  const previewPlace =
+    searchResults.find((result) => result.id === listHoveredSearchResultId)
+      ?.coordinate ??
+    discoveryPlaces.find(
+      (place) => `discovery:${place.id}` === listHoveredSearchResultId,
+    )?.coordinate;
+  const previewLon = previewPlace?.lon;
+  const previewLat = previewPlace?.lat;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const timer = window.setTimeout(() => {
+      if (!hoveredSearchResultId) {
+        const previous = searchPreviewRef.current;
+        if (!previous) return;
+        searchPreviewRef.current = null;
+        map.stop();
+        if (userFollowingRef.current)
+          window.dispatchEvent(new Event("mapsource:recenter"));
+        else
+          map.easeTo(
+            { ...previous, duration: 420, essential: true },
+            { searchPreview: true },
+          );
+      } else if (
+        listHoveredSearchResultId &&
+        previewLon !== undefined &&
+        previewLat !== undefined
+      ) {
+        map.stop();
+        if (!searchPreviewRef.current) {
+          const center = map.getCenter();
+          searchPreviewRef.current = {
+            center: [center.lng, center.lat],
+            zoom: map.getZoom(),
+            bearing: map.getBearing(),
+            pitch: map.getPitch(),
+            padding: {
+              top: 0,
+              right: 0,
+              bottom: 0,
+              left: 0,
+              ...map.getPadding(),
+            },
+          };
+        }
+        map.easeTo(
+          {
+            center: [previewLon, previewLat],
+            zoom: Math.max(map.getZoom(), 14.5),
+            offset: searchPreviewOffset(map),
+            padding: { top: 0, right: 0, bottom: 0, left: 0 },
+            duration: 420,
+            essential: true,
+          },
+          { searchPreview: true },
+        );
+      }
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [
+    hoveredSearchResultId,
+    listHoveredSearchResultId,
+    previewLon,
+    previewLat,
+    ready,
+    searchSelectionRevision,
+  ]);
+
+  useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
     searchMarkersRef.current.forEach((marker) => marker.remove());
@@ -2675,11 +2783,15 @@ export function MapCanvas({
         result.coordinate.lat,
       ];
       points.push(coordinate);
-      const element = document.createElement("button");
-      element.type = "button";
-      element.className = `search-map-marker ${selectedSearchResultId === result.id ? "is-selected" : ""}`;
+      const { element, visual } = placeMarkerElement(
+        `search-map-marker ${selectedSearchResultId === result.id ? "is-selected" : ""}`,
+      );
       element.ariaLabel = `Select ${result.name}`;
       element.dataset.resultId = result.id;
+      bindResultHover(element, result.id, (id) => {
+        if (id && searchPreviewRef.current) map.stop();
+        onSearchResultHover(id);
+      });
       const icon = document.createElement("span");
       icon.className = "search-map-marker__icon";
       appendSvg(
@@ -2692,16 +2804,24 @@ export function MapCanvas({
       const label = document.createElement("span");
       label.className = "search-map-marker__label";
       label.textContent = result.name;
-      element.append(icon, label);
+      visual.append(icon, label);
       element.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        if (fitSearchResults) {
+          setHeldSelection(
+            result.kind === "business"
+              ? { kind: "search-business", coordinate, result }
+              : { kind: "point", coordinate },
+          );
+          setHeldBuilding(null);
+        } else {
+          setHeldSelection(null);
+        }
         onSearchResultSelect(result);
       });
       searchMarkersRef.current.push(
-        new MapLibreMarker({ element, anchor: "bottom" })
-          .setLngLat(coordinate)
-          .addTo(map),
+        anchoredPointMarker(element, coordinate, map),
       );
     }
     const signature = searchResults.map((result) => result.id).join("|");
@@ -2743,6 +2863,7 @@ export function MapCanvas({
   }, [
     fitSearchResults,
     onSearchResultSelect,
+    onSearchResultHover,
     ready,
     searchResults,
     selectedSearchResultId,
@@ -2753,8 +2874,6 @@ export function MapCanvas({
     if (!map || !ready) return;
     businessMarkersRef.current.forEach((marker) => marker.remove());
     businessMarkersRef.current = [];
-    businessPopupRef.current?.remove();
-    businessPopupRef.current = null;
     if (!activeDiscovery) {
       focusedDiscoveryRef.current = null;
       return;
@@ -2767,11 +2886,13 @@ export function MapCanvas({
         place.coordinate.lat,
       ];
       points.push(coordinate);
-      const element = document.createElement("button");
-      element.type = "button";
-      element.className = "business-marker";
+      const { element, visual } = placeMarkerElement("business-marker");
       element.ariaLabel = place.name ?? `Open ${activeDiscovery} details`;
       element.dataset.resultId = `discovery:${place.id}`;
+      bindResultHover(element, element.dataset.resultId, (id) => {
+        if (id && searchPreviewRef.current) map.stop();
+        onSearchResultHover(id);
+      });
       const icon = document.createElement("span");
       icon.className = "business-marker__icon";
       appendSvg(
@@ -2781,26 +2902,21 @@ export function MapCanvas({
       const label = document.createElement("span");
       label.className = "business-marker__label";
       label.textContent = place.name ?? place.address.street ?? activeDiscovery;
-      element.append(icon, label);
-      const marker = new MapLibreMarker({ element })
-        .setLngLat(coordinate)
-        .addTo(map);
+      visual.append(icon, label);
+      const marker = anchoredPointMarker(element, coordinate, map);
       element.addEventListener("click", (event) => {
         event.stopPropagation();
+        setHeldSelection({
+          kind: "business",
+          coordinate,
+          place,
+          category: activeDiscovery,
+        });
+        setHeldBuilding(null);
         onDiscoverySelect(place);
-        businessPopupRef.current?.remove();
         businessMarkersRef.current.forEach((item) =>
           item.getElement().classList.toggle("is-active", item === marker),
         );
-        businessPopupRef.current = new Popup({
-          closeButton: true,
-          closeOnClick: true,
-          offset: 18,
-          maxWidth: "290px",
-        })
-          .setLngLat(coordinate)
-          .setDOMContent(placePopup(place, activeDiscovery))
-          .addTo(map);
       });
       businessMarkersRef.current.push(marker);
     }
@@ -2829,10 +2945,39 @@ export function MapCanvas({
     return () => {
       businessMarkersRef.current.forEach((marker) => marker.remove());
       businessMarkersRef.current = [];
-      businessPopupRef.current?.remove();
-      businessPopupRef.current = null;
     };
-  }, [activeDiscovery, discoveryPlaces, onDiscoverySelect, ready]);
+  }, [
+    activeDiscovery,
+    discoveryPlaces,
+    onDiscoverySelect,
+    onSearchResultHover,
+    ready,
+  ]);
+
+  useEffect(() => {
+    const markers = [
+      ...searchMarkersRef.current,
+      ...businessMarkersRef.current,
+    ];
+    const hasMatch = markers.some(
+      (marker) =>
+        marker.getElement().dataset.resultId === hoveredSearchResultId,
+    );
+    for (const marker of markers) {
+      const element = marker.getElement();
+      const highlighted =
+        hasMatch && element.dataset.resultId === hoveredSearchResultId;
+      element.classList.toggle("is-highlighted", highlighted);
+      element.classList.toggle("is-dimmed", hasMatch && !highlighted);
+    }
+  }, [
+    hoveredSearchResultId,
+    ready,
+    searchResults,
+    discoveryPlaces,
+    selectedSearchResultId,
+    activeDiscovery,
+  ]);
 
   useEffect(() => {
     for (const marker of businessMarkersRef.current) {
@@ -3027,14 +3172,12 @@ export function MapCanvas({
     const map = mapRef.current;
     if (!map || !ready) return;
     const coordinates = routeCoordinates(route);
-    (map.getSource("route") as GeoJSONSource | undefined)?.setData({
-      type: "Feature",
-      properties: {},
-      geometry: { type: "LineString", coordinates },
-    });
     const connectors = routeConnectors(waypointsRef.current, coordinates);
-    (map.getSource("route-connectors") as GeoJSONSource | undefined)?.setData(
+    syncRouteOverlay(
+      map,
+      coordinates,
       connectors,
+      lineAtProgress(coordinates, navigationProgressRef.current),
     );
     if (containerRef.current) {
       containerRef.current.dataset.routeCoordinateCount = String(
@@ -3084,11 +3227,9 @@ export function MapCanvas({
     if (!map || !ready) return;
     const coordinates = routeCoordinates(route);
     const traveled = lineAtProgress(coordinates, navigationProgress);
-    (map.getSource("route-traveled") as GeoJSONSource | undefined)?.setData({
-      type: "Feature",
-      properties: {},
-      geometry: { type: "LineString", coordinates: traveled },
-    });
+    (map.getSource("route-traveled") as GeoJSONSource | undefined)?.setData(
+      routeLine(traveled),
+    );
   }, [navigationProgress, ready, route]);
 
   useEffect(() => {

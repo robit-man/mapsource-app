@@ -158,6 +158,22 @@ export default function App() {
   const [selectedSearchResultId, setSelectedSearchResultId] = useState<
     string | null
   >(null);
+  const [searchHover, setSearchHover] = useState<{
+    id: string;
+    source: "list" | "map";
+  } | null>(null);
+  const hoveredSearchResultId = searchHover?.id ?? null;
+  const [searchSelectionRevision, setSearchSelectionRevision] = useState(0);
+  const hoverListResult = useCallback((id: string | null) => {
+    setSearchHover((current) =>
+      id ? { id, source: "list" } : current?.source === "list" ? null : current,
+    );
+  }, []);
+  const hoverMapResult = useCallback((id: string | null) => {
+    setSearchHover((current) =>
+      id ? { id, source: "map" } : current?.source === "map" ? null : current,
+    );
+  }, []);
   const [searchAreaAvailable, setSearchAreaAvailable] = useState(false);
   const [searchAreaRevision, setSearchAreaRevision] = useState(0);
   const [inspection, setInspection] = useState<InspectionState | null>(null);
@@ -575,6 +591,8 @@ export default function App() {
 
   const selectSearchResult = useCallback(
     (result: PresentedSearchResult) => {
+      setSearchHover(null);
+      setSearchSelectionRevision((revision) => revision + 1);
       setSelectedSearchResultId(result.id);
       if (pendingEndpointRef.current || waypointsRef.current.length > 0) {
         addSearchResult(result);
@@ -810,6 +828,8 @@ export default function App() {
     (place: DiscoveryPlace) => {
       const [result] = presentDiscoveryPlaces([place]);
       if (!result) return;
+      setSearchHover(null);
+      setSearchSelectionRevision((revision) => revision + 1);
       setSelectedSearchResultId(result.id);
       inspectPoint(result.coordinate, true, result.name);
     },
@@ -851,6 +871,12 @@ export default function App() {
         fitSearchResults={!routeSelectionActive}
         searchResults={discoveryCategory ? [] : textSearchResults}
         selectedSearchResultId={selectedSearchResultId}
+        hoveredSearchResultId={hoveredSearchResultId}
+        listHoveredSearchResultId={
+          searchHover?.source === "list" ? searchHover.id : null
+        }
+        searchSelectionRevision={searchSelectionRevision}
+        onSearchResultHover={hoverMapResult}
         onSearchResultSelect={selectSearchResult}
         selectedWaypointId={selectedWaypointId}
         spatialOverlay={spatialLayer?.overlay ?? null}
@@ -865,6 +891,7 @@ export default function App() {
         categoryStatus={discoveryStatus}
         center={center}
         onCategory={(category) => {
+          setSearchHover(null);
           if (category && category !== discoveryCategory) {
             setDiscoveryPlaces([]);
             setDiscoveryStatus("loading");
@@ -886,6 +913,9 @@ export default function App() {
         searchAreaAvailable={searchAreaAvailable}
         routeSelectionActive={routeSelectionActive}
         selectedResultId={selectedSearchResultId}
+        hoveredResultId={hoveredSearchResultId}
+        hoveredOnMap={searchHover?.source === "map"}
+        onResultHover={hoverListResult}
       />
 
       <div className="map-tools">
@@ -1074,9 +1104,22 @@ export default function App() {
             );
           }
         }}
-        onRemove={(id) =>
-          setWaypoints((current) => current.filter((point) => point.id !== id))
-        }
+        onRemove={(id) => {
+          setSelectedWaypointId((current) => (current === id ? null : current));
+          setWaypoints((current) => {
+            const remaining = current.filter((point) => point.id !== id);
+            if (remaining.length !== 1) return remaining;
+            const survivor = remaining[0]!;
+            return [
+              {
+                ...survivor,
+                routeRole:
+                  survivor.routeRole ??
+                  (current[0]?.id === survivor.id ? "origin" : "destination"),
+              },
+            ];
+          });
+        }}
         onRename={(id, label) =>
           setWaypoints((current) =>
             current.map((point) =>

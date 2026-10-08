@@ -11,6 +11,9 @@ type SearchBarProps = {
   categoryResults: PresentedSearchResult[];
   categoryStatus: SearchStatus;
   selectedResultId: string | null;
+  hoveredResultId: string | null;
+  hoveredOnMap: boolean;
+  onResultHover: (id: string | null) => void;
   searchAreaAvailable: boolean;
   routeSelectionActive: boolean;
   onCategory: (category: string | null) => void;
@@ -29,6 +32,9 @@ export function SearchBar({
   categoryResults,
   categoryStatus,
   selectedResultId,
+  hoveredResultId,
+  hoveredOnMap,
+  onResultHover,
   searchAreaAvailable,
   routeSelectionActive,
   onCategory,
@@ -49,6 +55,11 @@ export function SearchBar({
   const presentedResults = activeCategory ? categoryResults : textResults;
   const presentedStatus = activeCategory ? categoryStatus : status;
   const hasIntent = query.trim().length >= 2;
+  const highlightedResultId = presentedResults.some(
+    (result) => result.id === hoveredResultId,
+  )
+    ? hoveredResultId
+    : null;
 
   useEffect(() => {
     onQueryResults(query.trim(), textResults, status);
@@ -78,26 +89,40 @@ export function SearchBar({
   }, [onCategory]);
 
   useEffect(() => {
-    if (!resultsOpen || !selectedResultId) return;
-    window.requestAnimationFrame(() =>
-      rowRefs.current
-        .get(selectedResultId)
-        ?.scrollIntoView({ block: "nearest" }),
-    );
-  }, [resultsOpen, selectedResultId]);
+    const id = hoveredOnMap ? hoveredResultId : selectedResultId;
+    if (!resultsOpen || !id) return;
+    const frame = window.requestAnimationFrame(() => {
+      const row = rowRefs.current.get(id);
+      const list = document.getElementById("map-search-results");
+      if (!row || !list) return;
+      const bounds = row.getBoundingClientRect();
+      const viewport = list.getBoundingClientRect();
+      if (bounds.top < viewport.top || bounds.bottom > viewport.bottom) {
+        row.scrollIntoView({
+          block: "nearest",
+          inline: "nearest",
+          behavior: hoveredOnMap ? "smooth" : "auto",
+        });
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [hoveredOnMap, hoveredResultId, resultsOpen, selectedResultId]);
 
   const closeResults = () => {
+    onResultHover(null);
     setResultsOpen(false);
-    window.requestAnimationFrame(() => disclosureRef.current?.focus());
+    disclosureRef.current?.focus();
   };
 
   const collapse = () => {
+    onResultHover(null);
     setExpanded(false);
     setResultsOpen(false);
     inputRef.current?.blur();
   };
 
   const clear = () => {
+    onResultHover(null);
     setQuery("");
     setResultsOpen(false);
     onCategory(null);
@@ -114,7 +139,15 @@ export function SearchBar({
           : `${presentedResults.length} ${presentedResults.length === 1 ? "result" : "results"}`;
 
   return (
-    <div className={`search-shell ${expanded ? "is-expanded" : ""}`}>
+    <div
+      className={`search-shell ${expanded ? "is-expanded" : ""}`}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.stopPropagation();
+        if (resultsOpen) closeResults();
+        else collapse();
+      }}
+    >
       <div className="search-bar">
         <button
           aria-label="Open search"
@@ -137,11 +170,6 @@ export function SearchBar({
             if (!query.trim() && nextQuery.trim()) setSearchBias(center);
             setQuery(nextQuery);
             onCategory(null);
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== "Escape") return;
-            if (resultsOpen) closeResults();
-            else collapse();
           }}
           placeholder="Search trailheads, parks, addresses"
           spellCheck="false"
@@ -209,7 +237,10 @@ export function SearchBar({
             disabled={
               presentedStatus === "loading" && presentedResults.length === 0
             }
-            onClick={() => setResultsOpen((value) => !value)}
+            onClick={() => {
+              onResultHover(null);
+              setResultsOpen((value) => !value);
+            }}
             type="button"
           >
             {presentedStatus === "loading" && (
@@ -265,9 +296,18 @@ export function SearchBar({
                   else rowRefs.current.delete(result.id);
                 }}
                 aria-selected={selectedResultId === result.id}
-                className={`search-result ${selectedResultId === result.id ? "is-selected" : ""}`}
+                className={`search-result ${selectedResultId === result.id ? "is-selected" : ""} ${highlightedResultId === result.id ? "is-highlighted" : highlightedResultId ? "is-dimmed" : ""}`}
+                data-result-id={result.id}
                 key={result.id}
                 onClick={() => onSelect(result)}
+                onPointerEnter={(event) => {
+                  if (event.pointerType !== "touch") onResultHover(result.id);
+                }}
+                onPointerLeave={(event) => {
+                  if (event.pointerType !== "touch") onResultHover(null);
+                }}
+                onFocus={() => onResultHover(result.id)}
+                onBlur={() => onResultHover(null)}
                 role="option"
                 type="button"
               >

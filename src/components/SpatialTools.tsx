@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "./Icon";
+import { geometryFromGeoJson } from "../spatial-geometry";
 import type {
   ApiError,
   CapabilityCatalog,
@@ -250,6 +251,19 @@ export function SpatialTools({
       if (!response.ok)
         throw new Error(errorMessage(payload as ApiError, response.status));
       const next = payload as SpatialToolResult;
+      if (next.overlay) {
+        next.overlay = {
+          ...next.overlay,
+          features: next.overlay.features.map((feature) => {
+            const geometry = geometryFromGeoJson(feature.geometry);
+            if (!geometry)
+              throw new Error(
+                "The service returned invalid map geometry. Please try again.",
+              );
+            return { ...feature, geometry };
+          }),
+        };
+      }
       setResult(next);
       if (next.overlay) onOverlay(next.overlay, next.title);
       if (tool === "contours") onSurface("elevation");

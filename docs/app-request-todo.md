@@ -356,6 +356,84 @@ location` origin actions; destination shows `Select on map or search`.
       a selected result into a route waypoint when the route planner has an
       explicit pending origin or destination.
 
+- [x] APP-117 Float the desktop planner at bottom left with compact
+      and full-height modes, and move search to the right without overlap.
+- [x] APP-118 Keep search and category markers anchored during
+      hover and focus, and reuse the held-point action menu for map results.
+- [x] APP-119 Restore visible route ribbons through concurrent
+      route and style changes, above opaque basemap layers.
+- [x] APP-120 Link map and dropdown result hover so the matching
+      place stays prominent while the other results fade in both surfaces.
+- [x] APP-121 Show either the ordinary point label or the business
+      card for a selected map result, keeping its anchored actions available
+      without overlapping labels.
+- [x] APP-122 Make search close controls 42px square and allow
+      either endpoint to be removed from a two-stop route, preserving its empty
+      origin or destination slot for replacement.
+- [x] APP-123 Scroll the corresponding result row into view on map
+      hover, and temporarily ease the map to a list-hovered place before returning
+      to the previous view.
+- [x] APP-124 Unwrap GeoJSON Features returned by spatial analysis,
+      convert pipeline place records to map Points, reject malformed overlays without
+      crashing, and use integer raster
+      zooms so static snapshots include their basemap in every supported style.
+- [x] APP-125 Center capability descriptions with flex and keep
+      every shared loading spinner square, including spatial-tool buttons.
+
+### 2026-10-07 desktop and hover release
+
+The source gate passed formatting, lint, TypeScript, 39 unit tests, a production
+build, and 43 applicable browser tests (9 viewport-specific skips). The dependency
+audit reports zero vulnerabilities after updating the two affected development
+dependencies. Focused route-pixel checks also passed on desktop and mobile with
+DOM controls hidden from the capture and an opaque basemap paint fixture.
+
+`mapsource-app.service` restarted at 14:47:20 PDT. The public HTML matches the
+installed build (`index-Dyaajalj.js`, `index-BxDq3ULB.css`) and now revalidates
+instead of receiving the static asset cache policy. The public deployment check
+passed health, five map surfaces, tile classes, transit discovery, all five route
+modes, the SDK catalog, spatial tools, static rendering, and satellite imagery.
+Live desktop and 360px mobile browser checks confirmed the planner layouts,
+bidirectional hover fading and reset, visible route pixels through Dark/Light
+style changes, and no JavaScript errors.
+
+The previous Git baseline is `16c9290cfe4e4353ef0249fd5fed87a36c48be8a`.
+Its served build was saved before replacement under the adjacent service's
+managed diagnostics policy as
+`app-deployment/2026-10-07T21-43-12.165Z-rollback.tar.gz` (14-day retention).
+
+### 2026-10-07 spatial and interaction fixes
+
+The complete source gate passed formatting, lint, TypeScript, 45 unit tests,
+a clean production build, and 51 applicable browser tests (11 viewport-specific
+skips). The dependency audit reports zero vulnerabilities. Regression coverage
+includes Feature-wrapped analysis geometry, compute collections containing place
+records, malformed geometry handling, exclusive business/point labels, endpoint
+removal and replacement, result scrolling and temporary camera focus, 42px search
+controls, circular spinners, and centered capability descriptions.
+
+`mapsource-app.service` restarted at 15:33:11 PDT with the tested build. The public
+HTML serves `index-DR76L64Y.js` and `index-BISSTi1v.css`. Public browser checks ran
+all ten spatial actions successfully, including a Polygon buffer and a pipeline
+returning six valid GeoJSON Points. The pipeline previously passed place records
+through as Features without geometry; the server now creates Point Features from
+their coordinates before the browser receives them.
+
+A final public browser pass ran Cafes, Food, Parks, and Fuel through `Run
+pipeline`; every category returned six valid Points without an error. It also
+rendered and inspected all three static basemaps, checked capability-description
+flex centering, and completed without JavaScript errors. The static images retain
+visible streets, labels, terrain detail, route overlays, and attribution.
+
+The built-server checks decoded Dark, Light, and Mapsource static snapshots and
+verified populated basemaps. Live desktop and 360px mobile checks confirmed result
+fading and reset, result scrolling, temporary camera focus and restoration,
+exclusive selection labels, endpoint removal, visible route pixels across style
+changes, and no JavaScript errors. The original served build is retained under
+the adjacent service's managed diagnostics policy as
+`app-deployment/2026-10-07T22-13-15.217Z-rollback.tar.gz` (14-day retention), with
+Git baseline `16c9290cfe4e4353ef0249fd5fed87a36c48be8a` recorded for rollback.
+
 ## Release evidence required before closing in-progress work
 
 - [x] TODO-VERIFY-001 `npm run validate` passes from a clean production build.

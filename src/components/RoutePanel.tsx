@@ -538,6 +538,68 @@ export function RoutePanel({
       aria-label="Route planner"
       style={panelStyle}
     >
+      <div className="desktop-planner-toolbar">
+        <span>
+          <Icon name="route" size={16} />
+          Route planner
+        </span>
+        <div>
+          <button
+            aria-label={
+              sheetMode === "minimized"
+                ? "Restore route planner"
+                : "Minimize route planner"
+            }
+            onClick={() =>
+              snapSheet(sheetMode === "minimized" ? "half" : "minimized")
+            }
+            type="button"
+          >
+            <Icon
+              name={sheetMode === "minimized" ? "chevronUp" : "minus"}
+              size={16}
+            />
+          </button>
+          <button
+            aria-label={
+              sheetMode === "expanded"
+                ? "Collapse route planner"
+                : "Expand route planner"
+            }
+            aria-expanded={sheetMode === "expanded"}
+            onClick={() =>
+              snapSheet(sheetMode === "expanded" ? "half" : "expanded")
+            }
+            type="button"
+          >
+            <Icon
+              name={sheetMode === "expanded" ? "chevronDown" : "chevronUp"}
+              size={16}
+            />
+          </button>
+        </div>
+      </div>
+      {sheetMode === "minimized" && (
+        <button
+          className="desktop-planner-preview"
+          onClick={() => snapSheet("half")}
+          type="button"
+        >
+          <span>
+            <strong>
+              {route
+                ? `${formatDistance(routeDistance)} · ${formatDuration(routeDuration)}`
+                : "Where would you like to go?"}
+            </strong>
+            <small>
+              {route
+                ? "Stops, directions and elevation"
+                : "Open the planner to choose your stops"}
+            </small>
+          </span>
+          <Icon name="arrow" size={18} />
+        </button>
+      )}
       <button
         aria-expanded={sheetMode === "expanded"}
         aria-label={
@@ -1006,15 +1068,13 @@ export function RoutePanel({
                     >
                       <Icon name="pin" size={15} />
                     </button>
-                    {waypoints.length > 2 && (
-                      <button
-                        aria-label={`Remove ${waypoint.label}`}
-                        onClick={() => onRemove(waypoint.id)}
-                        type="button"
-                      >
-                        <Icon name="close" size={15} />
-                      </button>
-                    )}
+                    <button
+                      aria-label={`Remove ${waypoint.label}`}
+                      onClick={() => onRemove(waypoint.id)}
+                      type="button"
+                    >
+                      <Icon name="close" size={15} />
+                    </button>
                   </div>
                 </div>
                 {inlineSearchId === waypoint.id &&

@@ -4,7 +4,6 @@ import { resolve } from "node:path";
 import Fastify, { type FastifyReply } from "fastify";
 import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
-import type { Geometry } from "geojson";
 import {
   allOperations,
   createClient,
@@ -14,6 +13,10 @@ import {
 import { buildCapabilityCatalog } from "../src/capability-catalog.js";
 import { addHouseNumberLayers } from "../src/map-style.js";
 import { rankSearchForRegion } from "../src/regional-search.js";
+import {
+  geometryFromGeoJson,
+  pipelineFeatures,
+} from "../src/spatial-geometry.js";
 import type {
   Coordinate,
   RouteMode,
@@ -1139,22 +1142,27 @@ app.post<{
       });
       if (result.error)
         return apiFailure(reply, result.response.status, result.error);
-      const data = result.data as {
-        geometry?: Geometry;
-        bbox?: number[];
-      };
-      const feature: SpatialOverlay["features"][number] | undefined =
-        data.geometry
-          ? {
-              type: "Feature",
-              properties: {
-                mapsourceKind: "analysis",
-                mapsourceColor: "#d8ed9d",
-                mapsourceOpacity: 0.2,
-              },
-              geometry: data.geometry,
-            }
-          : undefined;
+      const data = result.data;
+      const geometry = geometryFromGeoJson(data.geometry);
+      if (!geometry)
+        return apiFailure(reply, 502, {
+          error: {
+            code: "UPSTREAM_UNAVAILABLE",
+            message:
+              "Spatial analysis returned no usable geometry. Please try again.",
+          },
+        });
+      const feature: SpatialOverlay["features"][number] | undefined = geometry
+        ? {
+            type: "Feature",
+            properties: {
+              mapsourceKind: "analysis",
+              mapsourceColor: "#d8ed9d",
+              mapsourceOpacity: 0.2,
+            },
+            geometry,
+          }
+        : undefined;
       return spatialResult(
         tool,
         `${radiusMeters.toLocaleString()} m spatial buffer`,
@@ -1208,47 +1216,7 @@ app.post<{
         }>;
         result?: { summary?: string };
       };
-      const returned = data.data as
-        | { places?: Array<Record<string, unknown>> }
-        | { type?: string; features?: SpatialOverlay["features"] }
-        | Array<Record<string, unknown>>
-        | undefined;
-      const places = Array.isArray(returned)
-        ? returned
-        : "places" in (returned ?? {})
-          ? ((returned as { places?: Array<Record<string, unknown>> }).places ??
-            [])
-          : [];
-      const returnedFeatures =
-        !Array.isArray(returned) && "features" in (returned ?? {})
-          ? ((returned as { features?: SpatialOverlay["features"] }).features ??
-            [])
-          : [];
-      const placeFeatures = places.flatMap((place, index) => {
-        const coordinate = place.coordinate as
-          | { lat?: number; lon?: number }
-          | undefined;
-        const placePoint = coordinatePair(coordinate?.lat, coordinate?.lon);
-        if (!placePoint) return [];
-        return [
-          pointFeature(placePoint, {
-            mapsourceKind: "pipeline",
-            mapsourceLabel:
-              typeof place.name === "string"
-                ? place.name
-                : `${category} ${index + 1}`,
-          }),
-        ];
-      });
-      const features = returnedFeatures.length
-        ? returnedFeatures.map((feature) => ({
-            ...feature,
-            properties: {
-              ...(feature.properties ?? {}),
-              mapsourceKind: "pipeline",
-            },
-          }))
-        : placeFeatures;
+      const features = pipelineFeatures(data.data, category);
       return spatialResult(
         tool,
         "Server-side spatial pipeline",
@@ -1466,7 +1434,9 @@ app.post<{ Body: SpatialInput & { surface?: string } }>(
       body: JSON.stringify({
         lat: centerPoint.lat,
         lon: centerPoint.lon,
-        zoom: 13.2,
+        // Raster tile addresses require an integer XYZ zoom. Fractional zoom
+        // produces rejected tile requests and an image containing only overlays.
+        zoom: 13,
         width: 900,
         height: 560,
         style,
@@ -1777,7 +1747,7 @@ await app.register(fastifyStatic, {
 
 app.get("/", (_request, reply) => {
   reply.header("cache-control", "no-cache");
-  return reply.sendFile("index.html");
+  return reply.sendFile("index.html", { cacheControl: false });
 });
 
 app.setNotFoundHandler((request, reply) => {
@@ -1787,7 +1757,7 @@ app.setNotFoundHandler((request, reply) => {
     !request.url.startsWith("/map/")
   ) {
     reply.header("cache-control", "no-cache");
-    return reply.sendFile("index.html");
+    return reply.sendFile("index.html", { cacheControl: false });
   }
   return reply
     .code(404)

@@ -337,6 +337,18 @@ async function stubApplicationApis(page: Page) {
             paint: { "background-color": "#263027" },
           },
           {
+            id: "early-label-anchor",
+            type: "symbol",
+            source: "test-buildings",
+            layout: {},
+          },
+          {
+            id: "opaque-basemap-paint",
+            type: "fill",
+            source: "test-buildings",
+            paint: { "fill-color": "#263027", "fill-opacity": 1 },
+          },
+          {
             id: "buildings.fill",
             type: "fill",
             source: "test-buildings",
@@ -568,7 +580,23 @@ test("integrates live spatial tools and the complete SDK capability catalog", as
   await expect(tools.getByText("Use the whole spatial stack")).toBeVisible();
   await expect(tools.getByText("Live", { exact: true })).toBeVisible();
 
+  let finishReach!: () => void;
+  const pendingReach = new Promise<void>((resolve) => {
+    finishReach = resolve;
+  });
+  await page.route("**/api/spatial/isochrone", async (route) => {
+    await pendingReach;
+    await route.fallback();
+  });
   await tools.getByRole("button", { name: "Draw reach" }).click();
+  const spinner = tools.locator(".spatial-tool-card__run .search-spinner");
+  await expect(spinner).toBeVisible();
+  const spinnerSize = await spinner.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return { width: box.width, height: box.height };
+  });
+  expect(Math.abs(spinnerSize.width - spinnerSize.height)).toBeLessThan(0.5);
+  finishReach();
   await expect(tools.getByText("20-minute reach")).toBeVisible();
   await expect(page.locator(".map-canvas")).toHaveAttribute(
     "data-spatial-feature-count",
@@ -581,6 +609,93 @@ test("integrates live spatial tools and the complete SDK capability catalog", as
     tools.getByText("published operations across 8 service families"),
   ).toBeVisible();
   await expect(tools.locator(".capability-catalog details")).toHaveCount(8);
+  await tools.locator(".capability-catalog summary").first().click();
+  await expect(
+    tools.locator(".capability-catalog details small").first(),
+  ).toHaveCSS("display", "flex");
+  await expect(
+    tools.locator(".capability-catalog details small").first(),
+  ).toHaveCSS("justify-content", "center");
+});
+
+test("renders an Analyze buffer and handles malformed geometry without losing the app", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  let malformed = false;
+  await page.route("**/api/spatial/analyze", async (request) => {
+    await request.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        tool: "analyze",
+        title: "750 m spatial buffer",
+        summary: "Buffer around the map center",
+        stats: [{ label: "Radius", value: "750 m" }],
+        generatedAt: "2026-10-07T00:00:00Z",
+        overlay: {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              properties: {},
+              geometry: malformed
+                ? { type: "Invalid" }
+                : {
+                    type: "Feature",
+                    properties: {},
+                    geometry: {
+                      type: "Polygon",
+                      coordinates: [
+                        [
+                          [-122.72, 45.53],
+                          [-122.71, 45.53],
+                          [-122.71, 45.54],
+                          [-122.72, 45.53],
+                        ],
+                      ],
+                    },
+                  },
+            },
+          ],
+        },
+      }),
+    });
+  });
+  await page.getByRole("button", { name: "Mapsource spatial tools" }).click();
+  const tools = page.getByRole("region", { name: "Mapsource spatial tools" });
+  await tools.getByRole("button", { name: "Analyze", exact: true }).click();
+  await tools.getByRole("button", { name: "Build buffer" }).click();
+  await expect(tools.locator(".spatial-result")).toContainText(
+    "750 m spatial buffer",
+  );
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-spatial-feature-count",
+    "1",
+  );
+  malformed = true;
+  await tools.getByRole("button", { name: "Build buffer" }).click();
+  await expect(tools.locator(".spatial-error")).toContainText(
+    "invalid map geometry",
+  );
+  await expect(
+    page.getByRole("region", { name: "Map", exact: true }),
+  ).toBeVisible();
+  await expect(
+    tools.getByRole("button", { name: "Run pipeline" }),
+  ).toBeEnabled();
+  expect(errors).toEqual([]);
+});
+
+test("revalidates the app document so refresh loads the current release", async ({
+  request,
+}) => {
+  for (const path of ["/", "/planner"]) {
+    const response = await request.get(path);
+    expect(response.status()).toBe(200);
+    expect(response.headers()["cache-control"]).toBe("no-cache");
+    expect(await response.text()).toContain('id="root"');
+  }
 });
 
 test("starts without a placeholder route or automatic route request", async ({
@@ -751,6 +866,46 @@ test("centers the untouched map from the shared IP location resolver", async ({
     .toBeLessThan(0.01);
 });
 
+test("can remove either endpoint or the last stop and refill the correct empty slot", async ({
+  page,
+}) => {
+  await seedRoute(page);
+  const removeButtons = page.locator('.stop-row button[aria-label^="Remove"]');
+  await expect(removeButtons).toHaveCount(2);
+  await removeButtons.first().click();
+  await expect(page.locator(".map-stop")).toHaveCount(1);
+  await expect(
+    page.locator('.empty-stop-row[data-route-role="origin"]'),
+  ).toBeVisible();
+  await expect(page.getByLabel("Stop 1")).toHaveValue(
+    "Pittock Mansion overlook",
+  );
+  await expect(page.locator(".stat-primary")).not.toContainText("3.14 km");
+  await selectEmptyStop(
+    page,
+    "origin",
+    "Lower Macleay",
+    "Lower Macleay Trailhead",
+  );
+  await expect(page.getByLabel("Stop 1")).toHaveValue(
+    "Lower Macleay Trailhead",
+  );
+  await expect(page.getByLabel("Stop 2")).toHaveValue(
+    "Pittock Mansion overlook",
+  );
+  await removeButtons.last().click();
+  await expect(
+    page.locator('.empty-stop-row[data-route-role="destination"]'),
+  ).toBeVisible();
+  await expect(page.getByLabel("Stop 1")).toHaveValue(
+    "Lower Macleay Trailhead",
+  );
+  await removeButtons.click();
+  await expect(page.locator(".stop-row")).toHaveCount(0);
+  await expect(page.locator(".empty-stop-row")).toHaveCount(2);
+  await expect(page.locator(".map-stop")).toHaveCount(0);
+});
+
 test("keeps the search spinner circular and evenly inset", async ({ page }) => {
   await page.route("**/api/search?**", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 700));
@@ -760,6 +915,10 @@ test("keeps the search spinner circular and evenly inset", async ({ page }) => {
     });
   });
   await page.getByRole("button", { name: "Open search" }).click();
+  const close = page.getByRole("button", { name: "Close search", exact: true });
+  await expect(close).toHaveCSS("width", "42px");
+  await expect(close).toHaveCSS("height", "42px");
+
   await page
     .getByLabel("Search trailheads, parks, and addresses")
     .fill("coffee");
@@ -834,6 +993,7 @@ test("projects ordered search results onto the map before opening the list", asy
   await page
     .getByLabel("Search trailheads, parks, and addresses")
     .press("Escape");
+  await expect(page.locator(".search-shell")).not.toHaveClass(/is-expanded/);
   await page.getByRole("button", { name: "Select Forest Park" }).click();
   await page.getByRole("button", { name: "Open search" }).click();
   await page.getByRole("button", { name: "3 results" }).click();
@@ -1330,6 +1490,13 @@ test("discovers visible businesses and exposes available actions", async ({
   await marker.click();
   const popup = page.getByRole("article");
   await expect(popup.getByText("Trail House Cafe")).toBeVisible();
+  await expect(page.getByLabel("Selected place details")).toContainText(
+    "12 Forest Road, Portland 97210",
+  );
+  await expect(page.locator(".intermediate-point__label")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Add map point to route", exact: true }),
+  ).toBeVisible();
   await expect(popup.getByRole("link", { name: "Call" })).toHaveAttribute(
     "href",
     "tel:+1 503 555 0101",
@@ -1341,6 +1508,80 @@ test("discovers visible businesses and exposes available actions", async ({
   await expect(
     popup.getByRole("link", { name: "OpenStreetMap" }),
   ).toHaveAttribute("href", "https://www.openstreetmap.org/node/101");
+
+  const point = await page.locator(".maplibregl-canvas").evaluate((canvas) => {
+    const box = canvas.getBoundingClientRect();
+    for (const y of [150, 250, 100, 300]) {
+      for (const fraction of [0.55, 0.8, 0.4]) {
+        const x = box.x + box.width * fraction;
+        if (document.elementFromPoint(x, box.y + y) === canvas)
+          return { x, y: box.y + y };
+      }
+    }
+    throw new Error("No uncovered map point available");
+  });
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.waitForTimeout(600);
+  await page.mouse.up();
+  await expect(page.locator(".intermediate-point__label")).toBeVisible();
+  await expect(page.locator(".business-card")).toHaveCount(0);
+
+  await marker.click();
+  await expect(page.locator(".business-card")).toBeVisible();
+  await expect(page.locator(".intermediate-point__label")).toHaveCount(0);
+  await page.locator(".maplibregl-popup-close-button").click();
+  await expect(page.locator(".business-card")).toHaveCount(0);
+  await expect(page.locator(".intermediate-point")).toHaveCount(0);
+});
+
+test("uses only the business card for a text-search business and the point label for other results", async ({
+  page,
+}) => {
+  await page.route("**/api/search?**", async (route) => {
+    if (
+      new URL(route.request().url()).searchParams.get("q") !== "search cafe"
+    ) {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        results: [
+          {
+            id: "search-cafe",
+            kind: "business",
+            name: "Search Cafe",
+            displayName: "Search Cafe, Portland, Oregon",
+            category: "cafe",
+            coordinate: { lat: 45.533, lon: -122.72 },
+          },
+        ],
+      }),
+    });
+  });
+  await page.getByRole("button", { name: "Open search" }).click();
+  const search = page.getByLabel("Search trailheads, parks, and addresses");
+  await search.fill("search cafe");
+  await page
+    .getByRole("button", { name: "Select Search Cafe", exact: true })
+    .click();
+  await expect(page.locator(".business-card")).toContainText("Search Cafe");
+  await expect(page.getByLabel("Selected place details")).toContainText(
+    "12 Forest Road, Portland 97210",
+  );
+  await expect(page.locator(".intermediate-point__label")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Inspect map point", exact: true }),
+  ).toBeVisible();
+
+  await search.fill("map first");
+  await page
+    .getByRole("button", { name: "Select Forest Park", exact: true })
+    .click();
+  await expect(page.locator(".intermediate-point__label")).toBeVisible();
+  await expect(page.locator(".business-card")).toHaveCount(0);
 });
 
 test("uses an actively tracked location when navigating to a selected place", async ({
@@ -1361,12 +1602,22 @@ test("uses an actively tracked location when navigating to a selected place", as
     "active",
   );
 
+  await expect(page.locator(".smoothed-user-location")).toBeVisible();
   const canvas = page.locator(".maplibregl-canvas");
-  const box = await canvas.boundingBox();
-  expect(box).not.toBeNull();
-  await page.mouse.move(box!.x + box!.width * 0.48, box!.y + 150);
+  const point = await canvas.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    for (const y of [150, 250, 100, 300]) {
+      for (const fraction of [0.48, 0.6, 0.8]) {
+        const x = box.x + box.width * fraction;
+        if (document.elementFromPoint(x, box.y + y) === element)
+          return { x, y: box.y + y };
+      }
+    }
+    throw new Error("No uncovered map point available");
+  });
+  await page.mouse.move(point.x, point.y);
   await page.mouse.down();
-  await page.waitForTimeout(600);
+  await expect(page.locator(".intermediate-point")).toBeVisible();
   await page.mouse.up();
   const details = page.getByLabel("Selected place details");
   await expect(details).toBeVisible();
@@ -2130,4 +2381,512 @@ test("snaps the mobile action sheet to minimized, half, and expanded modes", asy
     "data-route-coordinate-count",
     "0",
   );
+});
+
+async function renderedRoutePixels(page: Page) {
+  const screenshot = await page.locator(".maplibregl-canvas").screenshot({
+    // A canvas element screenshot still includes DOM controls painted above it.
+    // Hide those for this capture so only the actual map can supply route pixels.
+    style: `
+      .app-shell > :not(.map-canvas),
+      .map-canvas :not(.maplibregl-canvas-container):not(.maplibregl-canvas) {
+        visibility: hidden !important;
+      }
+    `,
+  });
+  return page.evaluate(async (base64) => {
+    const bytes = Uint8Array.from(atob(base64), (character) =>
+      character.charCodeAt(0),
+    );
+    const image = await createImageBitmap(
+      new Blob([bytes], { type: "image/png" }),
+    );
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext("2d")!;
+    context.drawImage(image, 0, 0);
+    const pixels = context.getImageData(0, 0, image.width, image.height).data;
+    let count = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      if (
+        pixels[index]! >= 180 &&
+        pixels[index + 1]! >= 220 &&
+        pixels[index + 2]! >= 90 &&
+        pixels[index + 2]! <= 200
+      )
+        count++;
+    }
+    image.close();
+    return count;
+  }, screenshot.toString("base64"));
+}
+
+test("floats the desktop planner below search and supports compact and full-height layouts", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(isMobile, "desktop planner layout");
+  await page.getByRole("button", { name: "Open search" }).click();
+  const panel = page.getByRole("complementary", { name: "Route planner" });
+  for (const width of [980, 1440, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect
+      .poll(
+        async () =>
+          (await page.locator(".search-shell").boundingBox())?.width ?? 0,
+      )
+      .toBeGreaterThan(100);
+    const planner = (await panel.boundingBox())!;
+    const search = (await page.locator(".search-shell").boundingBox())!;
+    expect(planner.x + planner.width).toBeLessThan(search.x);
+    expect(planner.y).toBeGreaterThan(search.y + search.height);
+    expect(planner.y + planner.height).toBeLessThanOrEqual(900);
+  }
+  await page.getByRole("button", { name: "Minimize route planner" }).click();
+  await expect(panel).toHaveAttribute("data-sheet-mode", "minimized");
+  expect((await panel.boundingBox())!.height).toBeLessThan(180);
+  await page
+    .getByRole("button", { name: "Expand route planner", exact: true })
+    .click();
+  await expect(panel).toHaveAttribute("data-sheet-mode", "expanded");
+  const fullHeight = (await panel.boundingBox())!;
+  expect(fullHeight.y).toBeLessThan(30);
+  expect(fullHeight.height).toBeGreaterThan(830);
+  expect(fullHeight.x + fullHeight.width).toBeLessThan(
+    (await page.locator(".search-shell").boundingBox())!.x,
+  );
+  await page
+    .getByRole("button", { name: "Collapse route planner", exact: true })
+    .click();
+  await expect(panel).toHaveAttribute("data-sheet-mode", "half");
+});
+
+test("keeps search and nearby marker icons fixed when hovered or focused", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(isMobile, "mouse and keyboard marker anchoring");
+  await page.getByRole("button", { name: "Open search" }).click();
+  await page
+    .getByLabel("Search trailheads, parks, and addresses")
+    .fill("map first");
+  await expect(page.locator(".search-map-marker")).toHaveCount(3);
+  await page.waitForTimeout(1000);
+  const marker = page.locator(".search-map-marker").first();
+  const icon = marker.locator(".search-map-marker__icon");
+  const before = (await icon.boundingBox())!;
+  await marker.hover();
+  await page.waitForTimeout(200);
+  const hovered = (await icon.boundingBox())!;
+  expect(
+    Math.abs(before.x + before.width / 2 - hovered.x - hovered.width / 2),
+  ).toBeLessThan(1);
+  expect(
+    Math.abs(before.y + before.height / 2 - hovered.y - hovered.height / 2),
+  ).toBeLessThan(1);
+  await page.mouse.move(5, 5);
+  await marker.focus();
+  await page.waitForTimeout(200);
+  const focused = (await icon.boundingBox())!;
+  expect(
+    Math.abs(before.x + before.width / 2 - focused.x - focused.width / 2),
+  ).toBeLessThan(1);
+  expect(
+    Math.abs(before.y + before.height / 2 - focused.y - focused.height / 2),
+  ).toBeLessThan(1);
+  await marker.click();
+  await expect(
+    page.getByRole("button", { name: "Add map point to route", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Inspect map point", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Navigate to map point", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-held-point-pixel-error",
+    /^(0|1)(\.\d+)?$/,
+  );
+  await page
+    .getByRole("button", { name: "Dismiss selected map point" })
+    .click();
+  await page.getByRole("button", { name: "Hungry" }).click();
+  const business = page.getByRole("button", {
+    name: "Trail House Cafe",
+    exact: true,
+  });
+  await expect(business).toBeVisible();
+  await page.waitForTimeout(1000);
+  await page.mouse.move(5, 5);
+  const businessBefore = (await business
+    .locator(".business-marker__icon")
+    .boundingBox())!;
+  await business.hover();
+  await page.waitForTimeout(200);
+  const businessAfter = (await business
+    .locator(".business-marker__icon")
+    .boundingBox())!;
+  expect(
+    Math.abs(
+      businessBefore.x +
+        businessBefore.width / 2 -
+        businessAfter.x -
+        businessAfter.width / 2,
+    ),
+  ).toBeLessThan(1);
+  expect(
+    Math.abs(
+      businessBefore.y +
+        businessBefore.height / 2 -
+        businessAfter.y -
+        businessAfter.height / 2,
+    ),
+  ).toBeLessThan(1);
+});
+
+test("links dropdown and map hover without selecting a result and restores opacity on exit", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(isMobile, "pointer hover highlighting");
+  await page.getByRole("button", { name: "Open search" }).click();
+  await expect(page.locator(".map-canvas")).toHaveAttribute("data-camera", /,/);
+  const initialCamera = await page
+    .locator(".map-canvas")
+    .getAttribute("data-camera");
+  await page
+    .getByLabel("Search trailheads, parks, and addresses")
+    .fill("map first");
+  await expect(page.locator(".search-map-marker")).toHaveCount(3);
+  await page.getByRole("button", { name: "3 results" }).click();
+  await expect
+    .poll(() => page.locator(".map-canvas").getAttribute("data-camera"))
+    .not.toBe(initialCamera);
+  const overview = await page
+    .locator(".map-canvas")
+    .getAttribute("data-camera");
+  const list = page.getByRole("listbox", { name: "Search results" });
+  const lowerRow = list
+    .getByRole("option")
+    .filter({ hasText: "Lower Macleay Trailhead" });
+  const forestRow = list.getByRole("option").filter({ hasText: "Forest Park" });
+  const pittockRow = list
+    .getByRole("option")
+    .filter({ hasText: "Pittock Mansion" });
+  const lower = page
+    .getByRole("button", {
+      name: "Select Lower Macleay Trailhead",
+      exact: true,
+    })
+    .locator(".map-point-anchor__visual");
+  const forest = page
+    .getByRole("button", { name: "Select Forest Park", exact: true })
+    .locator(".map-point-anchor__visual");
+  const pittock = page
+    .getByRole("button", {
+      name: "Select Pittock Mansion overlook",
+      exact: true,
+    })
+    .locator(".map-point-anchor__visual");
+  await lowerRow.hover();
+  await expect(lower).toHaveCSS("opacity", "1");
+  await expect(forest).toHaveCSS("opacity", "0.1");
+  await expect(pittock).toHaveCSS("opacity", "0.1");
+  await expect(lowerRow).toHaveCSS("opacity", "1");
+  await expect(forestRow).toHaveCSS("opacity", "0.2");
+  await expect
+    .poll(() => page.locator(".map-canvas").getAttribute("data-camera"))
+    .not.toBe(overview);
+  await page.mouse.move(5, 5);
+  await expect
+    .poll(() => page.locator(".map-canvas").getAttribute("data-camera"))
+    .toBe(overview);
+  await pittock.locator(".search-map-marker__icon").hover();
+  await expect(pittockRow).toHaveCSS("opacity", "1");
+  await expect(lowerRow).toHaveCSS("opacity", "0.2");
+  await expect(forestRow).toHaveCSS("opacity", "0.2");
+  await expect(pittock).toHaveCSS("opacity", "1");
+  await expect(lower).toHaveCSS("opacity", "0.1");
+  await expect(list.locator('[aria-selected="true"]')).toHaveCount(0);
+  await page.mouse.move(5, 5);
+  for (const element of [
+    lower,
+    forest,
+    pittock,
+    lowerRow,
+    forestRow,
+    pittockRow,
+  ]) {
+    await expect(element).toHaveCSS("opacity", "1");
+  }
+  await lowerRow.focus();
+  await expect(forest).toHaveCSS("opacity", "0.1");
+  await page.getByRole("button", { name: "Close results" }).click();
+  await expect(forest).toHaveCSS("opacity", "1");
+});
+
+test("links nearby-business hover between the list and map and restores opacity", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(isMobile, "Pointer hover highlighting");
+  await page.getByRole("button", { name: "Open search" }).click();
+  await page.route("**/api/discover?**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        category: "restaurant",
+        places: [
+          {
+            id: "cafe-north",
+            name: "North Trail Cafe",
+            categories: ["cafe"],
+            coordinate: { lat: 45.536, lon: -122.712 },
+            address: {},
+            properties: {},
+            sources: [],
+          },
+          {
+            id: "cafe-south",
+            name: "South Trail Cafe",
+            categories: ["cafe"],
+            coordinate: { lat: 45.525, lon: -122.716 },
+            address: {},
+            properties: {},
+            sources: [],
+          },
+        ],
+      }),
+    });
+  });
+  await expect(page.locator(".map-canvas")).toHaveAttribute("data-camera", /,/);
+  const initialCamera = await page
+    .locator(".map-canvas")
+    .getAttribute("data-camera");
+  await page.getByRole("button", { name: "Hungry" }).click();
+  await page.getByRole("button", { name: "2 results" }).click();
+  await expect
+    .poll(() => page.locator(".map-canvas").getAttribute("data-camera"))
+    .not.toBe(initialCamera);
+  const overview = await page
+    .locator(".map-canvas")
+    .getAttribute("data-camera");
+  const list = page.getByRole("listbox", { name: "Search results" });
+  const northRow = list
+    .getByRole("option")
+    .filter({ hasText: "North Trail Cafe" });
+  const southRow = list
+    .getByRole("option")
+    .filter({ hasText: "South Trail Cafe" });
+  const north = page
+    .getByRole("button", { name: "North Trail Cafe", exact: true })
+    .locator(".map-point-anchor__visual");
+  const south = page
+    .getByRole("button", { name: "South Trail Cafe", exact: true })
+    .locator(".map-point-anchor__visual");
+  await northRow.hover();
+  await expect(north).toHaveCSS("opacity", "1");
+  await expect(south).toHaveCSS("opacity", "0.1");
+  await expect
+    .poll(() => page.locator(".map-canvas").getAttribute("data-camera"))
+    .not.toBe(overview);
+  await page.mouse.move(5, 5);
+  await expect
+    .poll(() => page.locator(".map-canvas").getAttribute("data-camera"))
+    .toBe(overview);
+  await south.locator(".business-marker__icon").hover();
+  await expect(southRow).toHaveCSS("opacity", "1");
+  await expect(northRow).toHaveCSS("opacity", "0.2");
+  await page.mouse.move(5, 5);
+  for (const element of [north, south, northRow, southRow]) {
+    await expect(element).toHaveCSS("opacity", "1");
+  }
+});
+
+test("scrolls map hover into the list and temporarily frames a business on list hover", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(isMobile, "Pointer hover preview");
+  await page.route("**/api/discover?**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        category: "cafe",
+        places: Array.from({ length: 24 }, (_, index) => ({
+          id: `hover-${index}`,
+          name: `Hover Cafe ${index}`,
+          categories: ["cafe"],
+          coordinate: {
+            lat: 45.53 + Math.sin((index / 24) * Math.PI * 2) * 0.012,
+            lon: -122.716 + Math.cos((index / 24) * Math.PI * 2) * 0.02,
+          },
+          address: {},
+          properties: {},
+          sources: [],
+        })),
+      }),
+    });
+  });
+  await page.getByRole("button", { name: "Open search" }).click();
+  await page.getByRole("button", { name: "Coffee", exact: true }).click();
+  await expect(page.locator(".business-marker")).toHaveCount(24);
+  await page.getByRole("button", { name: "24 results" }).click();
+  await page.waitForTimeout(850);
+  const target = await page.evaluate(() => {
+    const list = document.querySelector('[role="listbox"]')!;
+    const listBox = list.getBoundingClientRect();
+    const rows = Array.from(list.querySelectorAll('[role="option"]'));
+    for (const row of rows) {
+      if (row.getBoundingClientRect().top < listBox.bottom + 10) continue;
+      const name = row.querySelector("strong")!.textContent!;
+      const marker = Array.from(
+        document.querySelectorAll(".business-marker"),
+      ).find((entry) => entry.getAttribute("aria-label") === name);
+      const icon = marker?.querySelector(".business-marker__icon");
+      if (!icon) continue;
+      const box = icon.getBoundingClientRect();
+      const x = box.x + box.width / 2,
+        y = box.y + box.height / 2;
+      if (marker!.contains(document.elementFromPoint(x, y)))
+        return { name, x, y };
+    }
+    throw new Error("No visible map marker with an out-of-view list row");
+  });
+  const list = page.getByRole("listbox", { name: "Search results" });
+  const row = list
+    .getByRole("option")
+    .filter({ has: page.getByText(target.name, { exact: true }) });
+  await page.mouse.move(target.x, target.y);
+  await expect
+    .poll(() =>
+      row.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const viewport = element
+          .closest('[role="listbox"]')!
+          .getBoundingClientRect();
+        return bounds.top >= viewport.top && bounds.bottom <= viewport.bottom;
+      }),
+    )
+    .toBe(true);
+  await page.mouse.move(5, 5);
+  const map = page.locator(".map-canvas");
+  const before = (await map.getAttribute("data-camera"))!
+    .split(",")
+    .map(Number);
+  await row.hover();
+  await expect.poll(() => mapZoom(page)).toBeGreaterThanOrEqual(14.49);
+  const marker = page.getByRole("button", { name: target.name, exact: true });
+  const markerBox = (await marker
+    .locator(".business-marker__icon")
+    .boundingBox())!;
+  const listBox = (await list.boundingBox())!;
+  expect(markerBox.x + markerBox.width).toBeLessThan(listBox.x);
+  expect(markerBox.y).toBeGreaterThan(60);
+  await marker.locator(".business-marker__icon").hover();
+  await expect(row).toHaveCSS("opacity", "1");
+  await expect(list.locator(".is-dimmed").first()).toHaveCSS("opacity", "0.2");
+  await expect(list.locator('[aria-selected="true"]')).toHaveCount(0);
+  await page.mouse.move(5, 5);
+  await expect
+    .poll(async () => {
+      const after = (await map.getAttribute("data-camera"))!
+        .split(",")
+        .map(Number);
+      return after.every(
+        (value, index) => Math.abs(value - before[index]!) < 0.002,
+      );
+    })
+    .toBe(true);
+});
+
+test("paints the route ribbon above opaque basemap layers and restores it during a route and style change", async ({
+  page,
+}) => {
+  // Isolate paint ordering from the building-gesture fixture, whose enormous
+  // extrusions legitimately occlude ground-level lines at close desktop zooms.
+  await page.route("**/map/style.json*", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        version: 8,
+        sources: {
+          "mapsource-terrain": {
+            type: "raster-dem",
+            tiles: ["/test-terrain/{z}/{x}/{y}.png"],
+            tileSize: 256,
+            maxzoom: 0,
+            encoding: "terrarium",
+          },
+          ground: {
+            type: "geojson",
+            data: {
+              type: "Feature",
+              properties: {},
+              geometry: {
+                type: "Polygon",
+                coordinates: [
+                  [
+                    [-124, 44],
+                    [-121, 44],
+                    [-121, 47],
+                    [-124, 47],
+                    [-124, 44],
+                  ],
+                ],
+              },
+            },
+          },
+        },
+        layers: [
+          {
+            id: "background",
+            type: "background",
+            paint: { "background-color": "#263027" },
+          },
+          {
+            id: "early-label-anchor",
+            type: "symbol",
+            source: "ground",
+            layout: {},
+          },
+          {
+            id: "opaque-basemap-paint",
+            type: "fill",
+            source: "ground",
+            paint: { "fill-color": "#263027", "fill-opacity": 1 },
+          },
+        ],
+      }),
+    });
+  });
+  await page.reload();
+  await seedRoute(page);
+  await expect.poll(() => renderedRoutePixels(page)).toBeGreaterThan(30);
+  await page.route("**/map/style.json?surface=dark", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.fallback();
+  });
+  await page.getByRole("button", { name: "Map layers" }).click();
+  await page.getByRole("button", { name: /Dark/ }).click();
+  await page.getByRole("button", { name: "Bike", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Bike" })).toBeVisible();
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-surface",
+    "dark",
+  );
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-route-coordinate-count",
+    "3",
+  );
+  await expect.poll(() => renderedRoutePixels(page)).toBeGreaterThan(30);
+  await page.getByRole("button", { name: "Map layers" }).click();
+  await page.getByRole("button", { name: /Light/ }).click();
+  await expect(page.locator(".map-canvas")).toHaveAttribute(
+    "data-surface",
+    "light",
+  );
+  await expect.poll(() => renderedRoutePixels(page)).toBeGreaterThan(30);
 });
