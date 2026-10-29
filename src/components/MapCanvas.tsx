@@ -765,6 +765,7 @@ export function MapCanvas({
   const resumeFollowAfterStyleRef = useRef(false);
   const preserveCameraForRouteRef = useRef(Boolean(initialCamera));
   const [ready, setReady] = useState<number | null>(null);
+  const [webglUnavailable, setWebglUnavailable] = useState(false);
   const [heldSelection, setHeldSelection] = useState<HeldPointSelection | null>(
     null,
   );
@@ -819,18 +820,27 @@ export function MapCanvas({
     if (!containerRef.current || mapRef.current) return;
     const mapContainer = containerRef.current;
     const restoredCamera = initialCameraRef.current;
-    const map = new MapLibreMap({
-      container: mapContainer,
-      style: `/map/style.json?surface=${surfaceRef.current}`,
-      center: restoredCamera?.center ?? [-122.716, 45.531],
-      zoom: restoredCamera?.zoom ?? 13.4,
-      pitch: restoredCamera?.pitch ?? 42,
-      bearing: restoredCamera?.bearing ?? -18,
-      maxPitch: 70,
-      fadeDuration: 520,
-      attributionControl: false,
-      cooperativeGestures: false,
-    });
+    let map: MapLibreMap;
+    try {
+      map = new MapLibreMap({
+        container: mapContainer,
+        style: `/map/style.json?surface=${surfaceRef.current}`,
+        center: restoredCamera?.center ?? [-122.716, 45.531],
+        zoom: restoredCamera?.zoom ?? 13.4,
+        pitch: restoredCamera?.pitch ?? 42,
+        bearing: restoredCamera?.bearing ?? -18,
+        maxPitch: 70,
+        fadeDuration: 520,
+        attributionControl: false,
+        cooperativeGestures: false,
+      });
+    } catch {
+      mapContainer.replaceChildren();
+      const frame = window.requestAnimationFrame(() =>
+        setWebglUnavailable(true),
+      );
+      return () => window.cancelAnimationFrame(frame);
+    }
     if (restoredCamera) mapContainer.dataset.restoredCamera = "true";
     mapRef.current = map;
     map.touchZoomRotate.enable();
@@ -3325,5 +3335,31 @@ export function MapCanvas({
     });
   }, [ready, spatialOverlay, spatialOverlayRevision]);
 
-  return <div className="map-canvas" ref={containerRef} />;
+  return (
+    <>
+      <div className="map-canvas" ref={containerRef} />
+      {webglUnavailable ? (
+        <section className="map-webgl-fallback" aria-label="Static map preview">
+          <div
+            role="img"
+            aria-label="Static 2D world map"
+            className="map-webgl-preview"
+          />
+          <p>
+            Interactive maps and globes require WebGL2. Enable graphics
+            acceleration in your browser, then reload.
+          </p>
+          <button type="button" onClick={() => window.location.reload()}>
+            Retry map
+          </button>
+          <small>
+            <a href="https://www.openstreetmap.org/copyright">
+              © OpenStreetMap contributors
+            </a>{" "}
+            · OpenMapTiles · CARTO
+          </small>
+        </section>
+      ) : null}
+    </>
+  );
 }

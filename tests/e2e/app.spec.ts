@@ -1389,6 +1389,29 @@ test("requests orientation with location and follows an absolute heading", async
   expect(routeRequestsByPage.get(page)).toBe(0);
 });
 
+test("keeps a static world preview when WebGL2 is unavailable", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const original = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (
+      type: string,
+      ...args: unknown[]
+    ) {
+      if (type === "webgl2") return null;
+      return Reflect.apply(original, this, [type, ...args]);
+    } as typeof original;
+  });
+  await page.reload();
+  await expect(
+    page.getByRole("region", { name: "Static map preview" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/Interactive maps and globes require WebGL2/),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry map" })).toBeVisible();
+});
+
 test("switches between a flat map and globe while retaining routes and basemaps", async ({
   page,
 }) => {

@@ -1476,6 +1476,36 @@ summary:focus-visible {
   color: var(--lime);
 }
 
+.map-webgl-fallback {
+  position: absolute;
+  z-index: 4;
+  top: 100px;
+  left: 50%;
+  width: min(440px, calc(100% - 32px));
+  padding: 16px;
+  transform: translateX(-50%);
+  color: var(--muted);
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.map-webgl-preview {
+  height: 240px;
+  background: url("/map/tiles/raster/dark/0/0/0.png") center / contain no-repeat;
+}
+
+.map-webgl-fallback button {
+  min-height: 44px;
+  padding: 8px 16px;
+  margin: 12px 0;
+  cursor: pointer;
+}
+
+.map-webgl-fallback small {
+  display: block;
+}
+
 .tool-button {
   display: grid;
   width: 48px;
