@@ -1389,6 +1389,38 @@ test("requests orientation with location and follows an absolute heading", async
   expect(routeRequestsByPage.get(page)).toBe(0);
 });
 
+test("switches between a flat map and globe while retaining routes and basemaps", async ({
+  page,
+}) => {
+  await seedRoute(page);
+  const map = page.locator(".map-canvas");
+  const canvas = await page.locator(".maplibregl-canvas").elementHandle();
+  await page.getByRole("button", { name: "Switch to 3D globe" }).click();
+  await expect(map).toHaveAttribute("data-projection", "globe");
+  await expect(
+    page.getByRole("button", { name: "Switch to 2D map" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(map).toHaveAttribute("data-route-coordinate-count", "3");
+  for (const surface of ["Dark", "Light", "Satellite"]) {
+    await page.getByRole("button", { name: "Map layers" }).click();
+    await page.getByRole("button", { name: new RegExp(surface) }).click();
+    await expect(map).toHaveAttribute("data-surface", surface.toLowerCase());
+    await expect(map).toHaveAttribute("data-projection", "globe");
+    await expect(map).toHaveAttribute("data-style-route-restored", "true");
+  }
+  await page.getByRole("button", { name: "Switch to 2D map" }).click();
+  await expect(map).toHaveAttribute("data-projection", "mercator");
+  await expect(
+    page.getByRole("button", { name: "Switch to 3D globe" }),
+  ).toHaveAttribute("aria-pressed", "false");
+  expect(
+    await canvas?.evaluate(
+      (element) => element === document.querySelector(".maplibregl-canvas"),
+    ),
+  ).toBe(true);
+  await expect(map).toHaveAttribute("data-route-coordinate-count", "3");
+});
+
 test("plans, searches, and switches map layers for a walk", async ({
   page,
   isMobile,

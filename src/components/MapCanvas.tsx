@@ -846,6 +846,55 @@ export function MapCanvas({
       visualizePitch: true,
     });
     map.addControl(navigationControl, "bottom-right");
+    // Projection is independent of the basemap, terrain and result overlays.
+    // Keep one map instance so a view switch retains routes and selection.
+    let globeView = false;
+    const viewControlElement = document.createElement("div");
+    viewControlElement.className =
+      "maplibregl-ctrl maplibregl-ctrl-group mapsource-view-control";
+    const viewButton = document.createElement("button");
+    viewButton.type = "button";
+    viewButton.disabled = true;
+    const updateViewControl = () => {
+      viewButton.textContent = globeView ? "2D" : "3D";
+      viewButton.ariaLabel = globeView
+        ? "Switch to 2D map"
+        : "Switch to 3D globe";
+      viewButton.title = viewButton.ariaLabel;
+      viewButton.setAttribute("aria-pressed", String(globeView));
+      mapContainer.dataset.projection = map.isStyleLoaded()
+        ? (map.getProjection().type as string)
+        : globeView
+          ? "globe"
+          : "mercator";
+    };
+    updateViewControl();
+    viewButton.addEventListener("click", () => {
+      globeView = !globeView;
+      userCameraInteractedRef.current = true;
+      initialLocationAppliedRef.current = true;
+      preserveCameraForRouteRef.current = true;
+      if (userTrackingRef.current) setCameraFollowing(false);
+      map.stop();
+      map.setProjection({ type: globeView ? "globe" : "mercator" });
+      map.easeTo({
+        pitch: 0,
+        bearing: 0,
+        ...(globeView ? { zoom: Math.min(map.getZoom(), 1.5) } : {}),
+        duration: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? 0
+          : 900,
+      });
+      updateViewControl();
+    });
+    viewControlElement.append(viewButton);
+    map.addControl(
+      {
+        onAdd: () => viewControlElement,
+        onRemove: () => viewControlElement.remove(),
+      },
+      "bottom-right",
+    );
     const compassButton = mapContainer.querySelector<HTMLButtonElement>(
       ".maplibregl-ctrl-compass",
     );
@@ -2088,6 +2137,9 @@ export function MapCanvas({
       containerRef.current?.classList.add("is-switching-surface");
     });
     map.on("style.load", () => {
+      map.setProjection({ type: globeView ? "globe" : "mercator" });
+      viewButton.disabled = false;
+      updateViewControl();
       const before = firstSymbolLayer(map);
       map.addSource("satellite", {
         type: "raster",
@@ -2510,6 +2562,10 @@ export function MapCanvas({
     };
     resumeFollowAfterStyleRef.current = userFollowingRef.current;
     containerRef.current?.classList.add("is-switching-surface");
+    const viewButton = containerRef.current?.querySelector<HTMLButtonElement>(
+      ".mapsource-view-control button",
+    );
+    if (viewButton) viewButton.disabled = true;
     map.setStyle(`/map/style.json?surface=${surface}`, { diff: true });
   }, [surface]);
 

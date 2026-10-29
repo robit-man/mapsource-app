@@ -1463,6 +1463,19 @@ summary:focus-visible {
   gap: 8px;
 }
 
+.mapsource-view-control button {
+  min-width: 44px;
+  min-height: 44px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.mapsource-view-control button[aria-pressed="true"] {
+  color: var(--lime);
+}
+
 .tool-button {
   display: grid;
   width: 48px;
