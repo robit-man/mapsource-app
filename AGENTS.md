@@ -29,6 +29,8 @@ npm audit --audit-level=high
 
 `npm run validate` includes format, lint, TypeScript, unit coverage, a clean production build, and deterministic desktop/mobile Playwright flows. Do not weaken a failing gate to land a change.
 
+**Standing owner instruction, 29 October 2026: never wait for GitHub CI.** GitHub CI status, queues, billing and availability must not block delivery after the exact release passes the required local checks above. Keep rollback artifacts, stage and verify assets on every serving host, update standbys before the serving owner, and verify the public application. This is standing authorization; do not ask for a CI exception on each release. Report CI results accurately when known.
+
 ## Local services
 
 - Vite development UI: `127.0.0.1:3210`
